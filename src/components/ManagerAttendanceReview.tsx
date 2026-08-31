@@ -1,10 +1,11 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { AttendanceRecord, AttendanceStatus, User, Property, AttendanceCorrectionRequest } from '../types';
+import { AttendanceRecord, AttendanceStatus, ShiftPunchStatus, User, Property, AttendanceCorrectionRequest } from '../types';
 import { useAuth } from '../context/AuthContext';
 import {
   getUsersByProperty,
   getAttendanceByUserAndDate,
   markAttendance,
+  reviewLatePenalty,
   getPropertyById,
   getAttendanceCorrectionRequestsByProperty,
   updateAttendanceCorrectionRequestStatus,
@@ -31,6 +32,8 @@ import {
   Hourglass,
   ArrowRight,
   Info,
+  AlertTriangle,
+  Flame,
 } from 'lucide-react';
 
 interface StaffAttendanceItem {
@@ -139,7 +142,7 @@ export default function ManagerAttendanceReview({
       // 1. Fetch existing attendance for this user and date if any, or create full record
       const existing = await getAttendanceByUserAndDate(req.userId, req.date);
 
-      // Mark the attendance record as shift_completed for that date
+      // Mark the attendance record as present with completed shift status for that date
       await markAttendance({
         id: existing?.id,
         userId: req.userId,
@@ -150,7 +153,10 @@ export default function ManagerAttendanceReview({
         clockInLng: existing?.clockInLng ?? null,
         clockOutTime: existing?.clockOutTime ?? null,
         clockOutSelfieUrl: existing?.clockOutSelfieUrl ?? null,
-        status: 'shift_completed',
+        status: 'present',
+        shiftStatus: 'completed',
+        managerAdjusted: true,
+        adjustmentReason: req.note ? `Approved correction: ${req.note}` : 'Approved correction by Manager',
         markedBy: currentUser.id,
       });
 
@@ -162,7 +168,7 @@ export default function ManagerAttendanceReview({
 
       setNotification({
         type: 'success',
-        message: `Approved attendance correction for ${userName} on ${req.date}. Marked as Shift Completed.`,
+        message: `Approved attendance correction for ${userName} on ${req.date}. Marked as Present (Completed Shift).`,
       });
 
       await loadData();
@@ -178,7 +184,10 @@ export default function ManagerAttendanceReview({
   };
 
   // Handle Rejecting Attendance Correction Request
-  const handleRejectCorrection = async (req: AttendanceCorrectionRequest, userName: string) => {
+  const handleRejectCorrection = async (
+    req: AttendanceCorrectionRequest,
+    userName: string
+  ) => {
     if (!currentUser) return;
     try {
       setProcessingCorrectionId(req.id);
@@ -204,6 +213,52 @@ export default function ManagerAttendanceReview({
     }
   };
 
+  // Handle Reviewing Late Penalty (Approve / Waive)
+  const handleReviewPenalty = async (
+    record: AttendanceRecord,
+    userName: string,
+    action: 'approved' | 'rejected',
+    penaltyAmount: number = 0
+  ) => {
+    if (!currentUser) return;
+    try {
+      await reviewLatePenalty(record.id, action, currentUser.id, penaltyAmount);
+      
+      setStaffItems((prev) =>
+        prev.map((item) =>
+          item.attendance?.id === record.id
+            ? {
+                ...item,
+                attendance: {
+                  ...item.attendance,
+                  latePenaltyStatus: action,
+                  latePenaltyAmount: action === 'approved' ? penaltyAmount : 0,
+                  latePenaltyReviewedBy: currentUser.id,
+                  latePenaltyReviewedAt: new Date().toISOString(),
+                },
+              }
+            : item
+        )
+      );
+
+      window.dispatchEvent(new CustomEvent('attendance-updated', { detail: { date: selectedDate } }));
+      onAttendanceMarked?.();
+
+      setNotification({
+        type: 'success',
+        message: action === 'approved'
+          ? `Approved late penalty of ₹${penaltyAmount} for ${userName}.`
+          : `Waived late penalty for ${userName}.`,
+      });
+    } catch (err) {
+      console.error('Failed to review late penalty', err);
+      setNotification({
+        type: 'error',
+        message: `Failed to update penalty status for ${userName}.`,
+      });
+    }
+  };
+
   // Handle setting attendance status for a person
   const handleSetStatus = async (
     person: User,
@@ -225,6 +280,9 @@ export default function ManagerAttendanceReview({
         clockOutTime: existingRecord?.clockOutTime ?? null,
         clockOutSelfieUrl: existingRecord?.clockOutSelfieUrl ?? null,
         status: newStatus,
+        shiftStatus: newStatus === 'present' ? (existingRecord?.clockOutTime ? 'completed' : 'in_progress') : 'not_started',
+        managerAdjusted: true,
+        adjustmentReason: `Marked as ${newStatus} by Manager`,
         markedBy: currentUser.id,
       });
 
@@ -238,13 +296,12 @@ export default function ManagerAttendanceReview({
       onAttendanceMarked?.();
 
       const statusLabels: Record<AttendanceStatus, string> = {
-        shift_completed: 'Shift Completed',
+        present: 'Present',
+        half_day: 'Half Day',
         week_off: 'Week Off',
         on_leave: 'On Leave',
         absent: 'Absent',
-        present: 'Present',
-        half_day: 'Half Day',
-        late: 'Late',
+        holiday: 'Holiday',
       };
 
       setNotification({
@@ -289,16 +346,19 @@ export default function ManagerAttendanceReview({
   const totalCount = staffItems.length;
   const markedCount = staffItems.filter((i) => i.attendance?.status !== null && i.attendance?.status !== undefined).length;
   const pendingCount = totalCount - markedCount;
-  const shiftCompletedCount = staffItems.filter((i) => i.attendance?.status === 'shift_completed').length;
+  const presentCount = staffItems.filter((i) => i.attendance?.status === 'present').length;
+  const halfDayCount = staffItems.filter((i) => i.attendance?.status === 'half_day').length;
   const weekOffCount = staffItems.filter((i) => i.attendance?.status === 'week_off').length;
   const onLeaveCount = staffItems.filter((i) => i.attendance?.status === 'on_leave').length;
   const absentCount = staffItems.filter((i) => i.attendance?.status === 'absent').length;
+  const pendingLateReviewCount = staffItems.filter((i) => i.attendance?.latePenaltyStatus === 'pending').length;
 
   // Filtered items
   const filteredStaffItems = staffItems.filter(({ user, attendance }) => {
     if (filterRole !== 'all' && user.role !== filterRole) return false;
     if (filterStatus === 'all') return true;
     if (filterStatus === 'unmarked') return !attendance?.status;
+    if (filterStatus === 'late_pending') return attendance?.latePenaltyStatus === 'pending';
     return attendance?.status === filterStatus;
   });
 
@@ -523,8 +583,10 @@ export default function ManagerAttendanceReview({
                 className="bg-transparent text-xs text-slate-200 focus:outline-none cursor-pointer"
               >
                 <option value="all" className="bg-slate-900">All Statuses</option>
-                <option value="unmarked" className="bg-slate-900">Pending Review</option>
-                <option value="shift_completed" className="bg-slate-900">Shift Completed</option>
+                <option value="unmarked" className="bg-slate-900">Unmarked</option>
+                <option value="late_pending" className="bg-slate-900">Late Penalty Pending Review</option>
+                <option value="present" className="bg-slate-900">Present</option>
+                <option value="half_day" className="bg-slate-900">Half Day</option>
                 <option value="week_off" className="bg-slate-900">Week Off</option>
                 <option value="on_leave" className="bg-slate-900">On Leave</option>
                 <option value="absent" className="bg-slate-900">Absent</option>
@@ -534,38 +596,42 @@ export default function ManagerAttendanceReview({
         </div>
 
         {/* Status Breakdown Summary Pills */}
-        <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 pt-2 border-t border-slate-800/60">
-          <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 text-center">
-            <div className="text-[11px] text-slate-400 font-medium">Total Staff</div>
-            <div className="text-base font-bold text-white font-mono mt-0.5">{totalCount}</div>
+        <div className="grid grid-cols-2 sm:grid-cols-7 gap-2 pt-2 border-t border-slate-800/60">
+          <div className="p-2 rounded-xl bg-slate-950/60 border border-slate-800 text-center">
+            <div className="text-[10px] text-slate-400 font-medium">Total Staff</div>
+            <div className="text-sm font-bold text-white font-mono mt-0.5">{totalCount}</div>
           </div>
-          <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 text-center">
-            <div className="text-[11px] text-amber-400/90 font-medium">Pending Review</div>
-            <div className="text-base font-bold text-amber-300 font-mono mt-0.5">{pendingCount}</div>
+          <div className="p-2 rounded-xl bg-slate-950/60 border border-slate-800 text-center">
+            <div className="text-[10px] text-emerald-400/90 font-medium">Present</div>
+            <div className="text-sm font-bold text-emerald-300 font-mono mt-0.5">{presentCount}</div>
           </div>
-          <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 text-center">
-            <div className="text-[11px] text-emerald-400/90 font-medium">Completed</div>
-            <div className="text-base font-bold text-emerald-300 font-mono mt-0.5">{shiftCompletedCount}</div>
+          <div className="p-2 rounded-xl bg-slate-950/60 border border-slate-800 text-center">
+            <div className="text-[10px] text-amber-400/90 font-medium">Half Day</div>
+            <div className="text-sm font-bold text-amber-300 font-mono mt-0.5">{halfDayCount}</div>
           </div>
-          <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 text-center">
-            <div className="text-[11px] text-sky-400/90 font-medium">Week Off</div>
-            <div className="text-base font-bold text-sky-300 font-mono mt-0.5">{weekOffCount}</div>
+          <div className="p-2 rounded-xl bg-slate-950/60 border border-slate-800 text-center">
+            <div className="text-[10px] text-sky-400/90 font-medium">Week Off</div>
+            <div className="text-sm font-bold text-sky-300 font-mono mt-0.5">{weekOffCount}</div>
           </div>
-          <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 text-center">
-            <div className="text-[11px] text-amber-400/90 font-medium">On Leave</div>
-            <div className="text-base font-bold text-amber-300 font-mono mt-0.5">{onLeaveCount}</div>
+          <div className="p-2 rounded-xl bg-slate-950/60 border border-slate-800 text-center">
+            <div className="text-[10px] text-violet-400/90 font-medium">On Leave</div>
+            <div className="text-sm font-bold text-violet-300 font-mono mt-0.5">{onLeaveCount}</div>
           </div>
-          <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 text-center">
-            <div className="text-[11px] text-rose-400/90 font-medium">Absent</div>
-            <div className="text-base font-bold text-rose-300 font-mono mt-0.5">{absentCount}</div>
+          <div className="p-2 rounded-xl bg-slate-950/60 border border-slate-800 text-center">
+            <div className="text-[10px] text-rose-400/90 font-medium">Absent</div>
+            <div className="text-sm font-bold text-rose-300 font-mono mt-0.5">{absentCount}</div>
+          </div>
+          <div className="p-2 rounded-xl bg-slate-950/60 border border-slate-800 text-center">
+            <div className="text-[10px] text-orange-400/90 font-medium">Late Review</div>
+            <div className="text-sm font-bold text-orange-300 font-mono mt-0.5">{pendingLateReviewCount}</div>
           </div>
         </div>
 
-        {/* Payroll LOP Policy Note */}
+        {/* Payroll Policy Note */}
         <div className="text-xs text-slate-300 bg-slate-950/60 p-3 rounded-xl border border-slate-800 flex items-start gap-2">
           <Info className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
           <span>
-            <strong>Payroll Rule:</strong> Sick leave is paid. Casual leave, Absent, and unmarked days are currently unpaid (Loss of Pay).
+            <strong>Payroll Rules:</strong> 4 week-offs per month (carried forward if unused). Standard deductions apply only for unapproved absences and unpaid leaves beyond monthly week-off quotas.
           </span>
         </div>
       </div>
@@ -588,6 +654,7 @@ export default function ManagerAttendanceReview({
         <div className="space-y-4">
           {filteredStaffItems.map(({ user, attendance }) => {
             const currentStatus = attendance?.status;
+            const shiftStatus = attendance?.shiftStatus || (attendance?.clockOutTime ? 'completed' : attendance?.clockInTime ? 'in_progress' : 'not_started');
             const isUpdating = updatingUserId === user.id;
 
             return (
@@ -597,12 +664,14 @@ export default function ManagerAttendanceReview({
                 className={`rounded-2xl bg-slate-900 border p-5 shadow-sm transition-all ${
                   isUpdating ? 'opacity-70 pointer-events-none' : ''
                 } ${
-                  currentStatus === 'shift_completed'
+                  currentStatus === 'present'
                     ? 'border-emerald-900/40 bg-slate-900/95'
+                    : currentStatus === 'half_day'
+                    ? 'border-amber-900/40 bg-slate-900/95'
                     : currentStatus === 'week_off'
                     ? 'border-sky-900/40 bg-slate-900/95'
                     : currentStatus === 'on_leave'
-                    ? 'border-amber-900/40 bg-slate-900/95'
+                    ? 'border-violet-900/40 bg-slate-900/95'
                     : currentStatus === 'absent'
                     ? 'border-rose-900/40 bg-slate-900/95'
                     : 'border-slate-800'
@@ -679,7 +748,7 @@ export default function ManagerAttendanceReview({
                     })()}
                   </div>
 
-                  {/* Clock In / Out Logged Data */}
+                  {/* Clock In / Out Logged Data & Shift Status */}
                   <div className="flex flex-wrap items-center gap-3 bg-slate-950/70 p-3 rounded-xl border border-slate-800/80">
                     {/* Clock In Info */}
                     <div className="flex items-center gap-2.5 pr-3 border-r border-slate-800">
@@ -731,7 +800,7 @@ export default function ManagerAttendanceReview({
                     </div>
 
                     {/* Clock Out Info */}
-                    <div className="flex items-center gap-2.5">
+                    <div className="flex items-center gap-2.5 pr-3 border-r border-slate-800">
                       {attendance?.clockOutSelfieUrl ? (
                         <button
                           type="button"
@@ -772,17 +841,46 @@ export default function ManagerAttendanceReview({
                         )}
                       </div>
                     </div>
+
+                    {/* Shift Punch Lifecycle Status */}
+                    <div className="space-y-0.5 text-xs">
+                      <div className="text-[10px] uppercase font-semibold text-slate-400 tracking-wider">
+                        Shift Lifecycle
+                      </div>
+                      <div>
+                        {shiftStatus === 'completed' ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400">
+                            <Check className="w-3 h-3" /> Completed
+                          </span>
+                        ) : shiftStatus === 'in_progress' ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-400">
+                            <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" /> In Progress
+                          </span>
+                        ) : shiftStatus === 'missing_punch' ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-400">
+                            <AlertTriangle className="w-3 h-3" /> Missing Punch
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-slate-500 italic">Not Started</span>
+                        )}
+                      </div>
+                    </div>
                   </div>
 
-                  {/* 5. Status Badge & 3. 4 Action Buttons */}
+                  {/* Status Badge & Action Controls */}
                   <div className="flex flex-col sm:flex-row lg:flex-col items-start sm:items-center lg:items-end gap-3 shrink-0">
                     {/* Visual Status Indicator Badge */}
                     <div className="flex items-center gap-2">
-                      <span className="text-xs text-slate-400">Current:</span>
-                      {currentStatus === 'shift_completed' ? (
+                      <span className="text-xs text-slate-400">Attendance:</span>
+                      {currentStatus === 'present' ? (
                         <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-950/80 border border-emerald-700/70 text-emerald-300 text-xs font-semibold">
                           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                          Shift Completed
+                          Present
+                        </span>
+                      ) : currentStatus === 'half_day' ? (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-950/80 border border-amber-700/70 text-amber-300 text-xs font-semibold">
+                          <Clock className="w-3.5 h-3.5 text-amber-400" />
+                          Half Day
                         </span>
                       ) : currentStatus === 'week_off' ? (
                         <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-sky-950/80 border border-sky-700/70 text-sky-300 text-xs font-semibold">
@@ -790,8 +888,8 @@ export default function ManagerAttendanceReview({
                           Week Off
                         </span>
                       ) : currentStatus === 'on_leave' ? (
-                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-950/80 border border-amber-700/70 text-amber-300 text-xs font-semibold">
-                          <Calendar className="w-3.5 h-3.5 text-amber-400" />
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-violet-950/80 border border-violet-700/70 text-violet-300 text-xs font-semibold">
+                          <Calendar className="w-3.5 h-3.5 text-violet-400" />
                           On Leave
                         </span>
                       ) : currentStatus === 'absent' ? (
@@ -802,29 +900,44 @@ export default function ManagerAttendanceReview({
                       ) : (
                         <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 text-xs font-medium italic">
                           <AlertCircle className="w-3.5 h-3.5 text-slate-500" />
-                          Not marked yet
+                          Unmarked
                         </span>
                       )}
                     </div>
 
-                    {/* 4 Status Action Buttons */}
+                    {/* Status Action Buttons */}
                     <div className="flex flex-wrap items-center gap-1.5">
-                      {/* 1. Shift Completed */}
+                      {/* 1. Present */}
                       <button
-                        id={`btn-status-completed-${user.id}`}
-                        onClick={() => handleSetStatus(user, attendance, 'shift_completed')}
+                        id={`btn-status-present-${user.id}`}
+                        onClick={() => handleSetStatus(user, attendance, 'present')}
                         disabled={isUpdating}
                         className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer flex items-center gap-1 ${
-                          currentStatus === 'shift_completed'
+                          currentStatus === 'present'
                             ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/40 ring-1 ring-emerald-400'
                             : 'bg-slate-800 hover:bg-emerald-950/60 text-slate-300 hover:text-emerald-300 border border-slate-700 hover:border-emerald-800'
                         }`}
                       >
                         <CheckCircle2 className="w-3 h-3" />
-                        Shift Completed
+                        Present
                       </button>
 
-                      {/* 2. Week Off */}
+                      {/* 2. Half Day */}
+                      <button
+                        id={`btn-status-halfday-${user.id}`}
+                        onClick={() => handleSetStatus(user, attendance, 'half_day')}
+                        disabled={isUpdating}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer flex items-center gap-1 ${
+                          currentStatus === 'half_day'
+                            ? 'bg-amber-600 text-white shadow-md shadow-amber-900/40 ring-1 ring-amber-400'
+                            : 'bg-slate-800 hover:bg-amber-950/60 text-slate-300 hover:text-amber-300 border border-slate-700 hover:border-amber-800'
+                        }`}
+                      >
+                        <Clock className="w-3 h-3" />
+                        Half Day
+                      </button>
+
+                      {/* 3. Week Off */}
                       <button
                         id={`btn-status-weekoff-${user.id}`}
                         onClick={() => handleSetStatus(user, attendance, 'week_off')}
@@ -839,22 +952,22 @@ export default function ManagerAttendanceReview({
                         Week Off
                       </button>
 
-                      {/* 3. On Leave */}
+                      {/* 4. On Leave */}
                       <button
                         id={`btn-status-onleave-${user.id}`}
                         onClick={() => handleSetStatus(user, attendance, 'on_leave')}
                         disabled={isUpdating}
                         className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer flex items-center gap-1 ${
                           currentStatus === 'on_leave'
-                            ? 'bg-amber-600 text-white shadow-md shadow-amber-900/40 ring-1 ring-amber-400'
-                            : 'bg-slate-800 hover:bg-amber-950/60 text-slate-300 hover:text-amber-300 border border-slate-700 hover:border-amber-800'
+                            ? 'bg-violet-600 text-white shadow-md shadow-violet-900/40 ring-1 ring-violet-400'
+                            : 'bg-slate-800 hover:bg-violet-950/60 text-slate-300 hover:text-violet-300 border border-slate-700 hover:border-violet-800'
                         }`}
                       >
                         <Calendar className="w-3 h-3" />
                         On Leave
                       </button>
 
-                      {/* 4. Absent */}
+                      {/* 5. Absent */}
                       <button
                         id={`btn-status-absent-${user.id}`}
                         onClick={() => handleSetStatus(user, attendance, 'absent')}
@@ -871,6 +984,54 @@ export default function ManagerAttendanceReview({
                     </div>
                   </div>
                 </div>
+
+                {/* Late Arrival & Penalty Review Section (if staff arrived late > 15m) */}
+                {attendance && (attendance.lateMinutes > 15 || attendance.latePenaltyStatus !== 'none') && (
+                  <div className="mt-3 pt-2.5 border-t border-slate-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs bg-amber-950/20 p-2.5 rounded-xl border border-amber-900/30">
+                    <div className="flex items-center gap-2 text-amber-200">
+                      <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>
+                        Late by <strong className="text-white font-mono">{attendance.lateMinutes} mins</strong> (Shift Start: {user.shiftStart || '09:00'})
+                        {attendance.latePenaltyStatus === 'approved' && (
+                          <span className="ml-2 px-2 py-0.5 rounded bg-rose-950 border border-rose-800 text-rose-300 font-semibold text-[11px]">
+                            Penalty Approved: ₹{attendance.latePenaltyAmount}
+                          </span>
+                        )}
+                        {attendance.latePenaltyStatus === 'rejected' && (
+                          <span className="ml-2 px-2 py-0.5 rounded bg-emerald-950 border border-emerald-800 text-emerald-300 font-semibold text-[11px]">
+                            Penalty Waived
+                          </span>
+                        )}
+                      </span>
+                    </div>
+
+                    {/* Late Penalty Review Actions */}
+                    {attendance.latePenaltyStatus === 'pending' ? (
+                      <div className="flex items-center gap-2 self-end sm:self-auto">
+                        <button
+                          type="button"
+                          onClick={() => handleReviewPenalty(attendance, user.name, 'rejected', 0)}
+                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium cursor-pointer"
+                        >
+                          Waive Penalty
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleReviewPenalty(attendance, user.name, 'approved', 50)}
+                          className="px-2.5 py-1 rounded-lg bg-rose-700 hover:bg-rose-600 text-white text-xs font-semibold cursor-pointer shadow"
+                        >
+                          Apply ₹50 Penalty
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-slate-400">
+                        {attendance.latePenaltyReviewedAt && (
+                          <span>Reviewed on {new Date(attendance.latePenaltyReviewedAt).toLocaleDateString()}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Audit footnote if marked by manager */}
                 {attendance?.markedBy && (

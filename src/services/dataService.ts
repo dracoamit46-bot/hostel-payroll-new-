@@ -2,6 +2,9 @@ import {
   Property,
   User,
   AttendanceRecord,
+  AttendanceStatus,
+  ShiftPunchStatus,
+  LatePenaltyStatus,
   WeekOffRequest,
   LeaveRequest,
   AttendanceCorrectionRequest,
@@ -46,6 +49,20 @@ interface DbAttendance {
   clock_out_time: string | null;
   clock_out_selfie_url: string | null;
   status: any;
+  shift_status?: any;
+  scheduled_shift_start?: string | null;
+  scheduled_shift_end?: string | null;
+  worked_minutes?: number | null;
+  total_hours?: number | null;
+  late_minutes?: number | null;
+  late_penalty_eligible?: boolean | null;
+  late_penalty_status?: any;
+  late_penalty_amount?: number | null;
+  late_penalty_reviewed_by?: string | null;
+  late_penalty_reviewed_at?: string | null;
+  half_day_reason?: string | null;
+  manager_adjusted?: boolean | null;
+  adjustment_reason?: string | null;
   marked_by: string | null;
 }
 
@@ -125,19 +142,99 @@ const mapUser = (db: DbUser): User => ({
   shiftEnd: db.shift_end,
 });
 
-const mapAttendance = (db: DbAttendance): AttendanceRecord => ({
-  id: db.id,
-  userId: db.user_id,
-  date: db.date,
-  clockInTime: db.clock_in_time,
-  clockInSelfieUrl: db.clock_in_selfie_url,
-  clockInLat: db.clock_in_lat,
-  clockInLng: db.clock_in_lng,
-  clockOutTime: db.clock_out_time,
-  clockOutSelfieUrl: db.clock_out_selfie_url,
-  status: db.status,
-  markedBy: db.marked_by,
-});
+const mapAttendance = (db: DbAttendance): AttendanceRecord => {
+  // Normalize status for backward compatibility:
+  // Old values: 'shift_completed' -> status = 'present', shiftStatus = 'completed'
+  //             'late' -> status = 'present', lateMinutes = 20, latePenaltyEligible = true
+  let resolvedStatus: AttendanceStatus = 'present';
+  let resolvedShiftStatus: ShiftPunchStatus = 'not_started';
+
+  if (db.status === 'shift_completed') {
+    resolvedStatus = 'present';
+    resolvedShiftStatus = 'completed';
+  } else if (db.status === 'late') {
+    resolvedStatus = 'present';
+    resolvedShiftStatus = db.clock_out_time ? 'completed' : 'in_progress';
+  } else if (
+    db.status === 'present' ||
+    db.status === 'half_day' ||
+    db.status === 'week_off' ||
+    db.status === 'on_leave' ||
+    db.status === 'absent' ||
+    db.status === 'holiday'
+  ) {
+    resolvedStatus = db.status;
+  }
+
+  // Determine shift punch state
+  if (db.shift_status) {
+    resolvedShiftStatus = db.shift_status as ShiftPunchStatus;
+  } else {
+    if (db.clock_out_time) {
+      resolvedShiftStatus = 'completed';
+    } else if (db.clock_in_time) {
+      resolvedShiftStatus = 'in_progress';
+    } else if (resolvedStatus === 'absent' || resolvedStatus === 'week_off' || resolvedStatus === 'on_leave') {
+      resolvedShiftStatus = 'not_started';
+    }
+  }
+
+  // Calculate worked minutes & total hours
+  let workedMinutes = db.worked_minutes ?? 0;
+  let totalHours = db.total_hours ?? (workedMinutes > 0 ? Number((workedMinutes / 60).toFixed(2)) : undefined);
+  if ((!workedMinutes || workedMinutes === 0) && db.clock_in_time && db.clock_out_time) {
+    try {
+      const [inH, inM] = db.clock_in_time.split(':').map(Number);
+      const [outH, outM] = db.clock_out_time.split(':').map(Number);
+      if (!isNaN(inH) && !isNaN(outH)) {
+        let diff = outH * 60 + outM - (inH * 60 + inM);
+        if (diff < 0) diff += 24 * 60; // overnight shift
+        workedMinutes = diff;
+        totalHours = Number((diff / 60).toFixed(2));
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // Late calculation & penalty normalization
+  const lateMinutes = db.late_minutes ?? (db.status === 'late' ? 20 : 0);
+  const latePenaltyEligible = db.late_penalty_eligible ?? (lateMinutes > 15);
+  const latePenaltyStatus: LatePenaltyStatus =
+    db.late_penalty_status && ['none', 'pending', 'approved', 'rejected'].includes(db.late_penalty_status)
+      ? (db.late_penalty_status as LatePenaltyStatus)
+      : latePenaltyEligible
+      ? 'pending'
+      : 'none';
+
+  return {
+    id: db.id,
+    userId: db.user_id,
+    date: db.date,
+    status: resolvedStatus,
+    shiftStatus: resolvedShiftStatus,
+    clockInTime: db.clock_in_time,
+    clockInSelfieUrl: db.clock_in_selfie_url,
+    clockInLat: db.clock_in_lat,
+    clockInLng: db.clock_in_lng,
+    clockOutTime: db.clock_out_time,
+    clockOutSelfieUrl: db.clock_out_selfie_url,
+    scheduledShiftStart: db.scheduled_shift_start,
+    scheduledShiftEnd: db.scheduled_shift_end,
+    workedMinutes,
+    totalHours,
+    lateMinutes,
+    latePenaltyEligible,
+    latePenaltyStatus,
+    latePenaltyAmount: db.late_penalty_amount ?? 0,
+    latePenaltyReviewedBy: db.late_penalty_reviewed_by,
+    latePenaltyReviewedAt: db.late_penalty_reviewed_at,
+    halfDayReason: db.half_day_reason,
+    managerAdjusted: db.manager_adjusted ?? false,
+    adjustmentReason: db.adjustment_reason,
+    markedBy: db.marked_by,
+  };
+};
 
 const mapTask = (db: DbTask): Task => ({
   id: db.id,
@@ -609,9 +706,89 @@ export const dataService = {
         }
       }
 
-      // Ensure status is never null if the table enforces a NOT NULL constraint
-      const safeStatus =
-        record.status ?? (record.clockOutTime ? 'shift_completed' : 'present');
+      // Fetch user shift details if scheduledShiftStart not provided
+      let shiftStart = record.scheduledShiftStart || null;
+      let shiftEnd = record.scheduledShiftEnd || null;
+      if (!shiftStart && record.userId) {
+        try {
+          const { data: u } = await supabase
+            .from('users')
+            .select('shift_start, shift_end')
+            .eq('id', record.userId)
+            .maybeSingle();
+          if (u) {
+            shiftStart = u.shift_start;
+            shiftEnd = u.shift_end;
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      // Calculate worked minutes & total hours
+      let workedMinutes = record.workedMinutes ?? 0;
+      if ((!workedMinutes || workedMinutes === 0) && record.clockInTime && record.clockOutTime) {
+        try {
+          const [inH, inM] = record.clockInTime.split(':').map(Number);
+          const [outH, outM] = record.clockOutTime.split(':').map(Number);
+          if (!isNaN(inH) && !isNaN(outH)) {
+            let diff = outH * 60 + outM - (inH * 60 + inM);
+            if (diff < 0) diff += 24 * 60;
+            workedMinutes = diff;
+          }
+        } catch {
+          // ignore
+        }
+      }
+      const totalHours = Number((workedMinutes / 60).toFixed(2));
+
+      // Calculate late minutes & penalty eligibility
+      let lateMinutes = record.lateMinutes ?? 0;
+      let latePenaltyEligible = record.latePenaltyEligible ?? false;
+      let latePenaltyStatus: LatePenaltyStatus = record.latePenaltyStatus ?? 'none';
+
+      if (record.clockInTime && shiftStart) {
+        try {
+          const [punchH, punchM] = record.clockInTime.split(':').map(Number);
+          const [schedH, schedM] = shiftStart.split(':').map(Number);
+          if (!isNaN(punchH) && !isNaN(schedH)) {
+            const punchTotal = punchH * 60 + punchM;
+            const schedTotal = schedH * 60 + schedM;
+            const diff = punchTotal - schedTotal;
+            if (diff > 0) {
+              lateMinutes = diff;
+              if (diff > 15) {
+                latePenaltyEligible = true;
+                if (latePenaltyStatus === 'none') {
+                  latePenaltyStatus = 'pending';
+                }
+              }
+            } else {
+              lateMinutes = 0;
+              latePenaltyEligible = false;
+              latePenaltyStatus = 'none';
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      // Determine shift status
+      let shiftStatus: ShiftPunchStatus = record.shiftStatus;
+      if (!shiftStatus) {
+        if (record.clockOutTime) {
+          shiftStatus = 'completed';
+        } else if (record.clockInTime) {
+          shiftStatus = 'in_progress';
+        } else {
+          shiftStatus = 'not_started';
+        }
+      }
+
+      // Ensure status is pure attendance outcome
+      const safeStatus: AttendanceStatus =
+        record.status ?? (record.clockInTime ? 'present' : 'absent');
 
       const payload = {
         user_id: record.userId,
@@ -623,6 +800,20 @@ export const dataService = {
         clock_out_time: record.clockOutTime,
         clock_out_selfie_url: record.clockOutSelfieUrl,
         status: safeStatus,
+        shift_status: shiftStatus,
+        scheduled_shift_start: shiftStart,
+        scheduled_shift_end: shiftEnd,
+        worked_minutes: workedMinutes,
+        total_hours: totalHours > 0 ? totalHours : null,
+        late_minutes: lateMinutes,
+        late_penalty_eligible: latePenaltyEligible,
+        late_penalty_status: latePenaltyStatus,
+        late_penalty_amount: record.latePenaltyAmount ?? 0,
+        late_penalty_reviewed_by: record.latePenaltyReviewedBy || null,
+        late_penalty_reviewed_at: record.latePenaltyReviewedAt || null,
+        half_day_reason: record.halfDayReason || null,
+        manager_adjusted: record.managerAdjusted ?? false,
+        adjustment_reason: record.adjustmentReason || null,
         marked_by: markedBy,
       };
 
@@ -640,7 +831,7 @@ export const dataService = {
           ) {
             const retryRes = await supabase
               .from('attendance_records')
-              .upsert({ id: record.id, ...payload, marked_by: null })
+              .upsert({ id: record.id, ...payload, marked_by: null, late_penalty_reviewed_by: null })
               .select()
               .single();
             if (!retryRes.error && retryRes.data) {
@@ -664,7 +855,7 @@ export const dataService = {
           ) {
             const retryRes = await supabase
               .from('attendance_records')
-              .upsert({ ...payload, marked_by: null }, { onConflict: 'user_id,date' })
+              .upsert({ ...payload, marked_by: null, late_penalty_reviewed_by: null }, { onConflict: 'user_id,date' })
               .select()
               .single();
             if (!retryRes.error && retryRes.data) {
@@ -675,6 +866,34 @@ export const dataService = {
         }
         return mapAttendance(data);
       }
+    } catch (err) {
+      notifySchemaMissing('attendance_records', err);
+      throw err;
+    }
+  },
+
+  async reviewLatePenalty(
+    recordId: string,
+    action: 'approved' | 'rejected',
+    reviewerId: string,
+    penaltyAmount: number = 0
+  ): Promise<AttendanceRecord | null> {
+    try {
+      const { data, error } = await supabase
+        .from('attendance_records')
+        .update({
+          late_penalty_status: action,
+          late_penalty_amount: action === 'approved' ? penaltyAmount : 0,
+          late_penalty_reviewed_by: reviewerId,
+          late_penalty_reviewed_at: new Date().toISOString(),
+        })
+        .eq('id', recordId)
+        .select()
+        .single();
+      if (error) {
+        throw new Error(error.message || 'Failed to review late penalty');
+      }
+      return data ? mapAttendance(data) : null;
     } catch (err) {
       notifySchemaMissing('attendance_records', err);
       throw err;
@@ -1477,6 +1696,7 @@ export const getAttendanceByUser = (userId: string) => dataService.getAttendance
 export const getAttendanceByDate = (date: string) => dataService.getAttendanceByDate(date);
 export const getAttendanceByUserAndDate = (userId: string, date: string) => dataService.getAttendanceByUserAndDate(userId, date);
 export const markAttendance = (r: Omit<AttendanceRecord, 'id'> & { id?: string }) => dataService.markAttendance(r);
+export const reviewLatePenalty = (recordId: string, action: 'approved' | 'rejected', reviewerId: string, penaltyAmount: number = 0) => dataService.reviewLatePenalty(recordId, action, reviewerId, penaltyAmount);
 
 export const getWeekOffRequests = () => dataService.getWeekOffRequests();
 export const getWeekOffRequestsByUser = (userId: string) => dataService.getWeekOffRequestsByUser(userId);

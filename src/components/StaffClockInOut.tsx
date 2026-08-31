@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { AttendanceRecord, Property } from '../types';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -11,6 +11,7 @@ import {
   Camera,
   MapPin,
   CheckCircle,
+  CheckCircle2,
   AlertCircle,
   AlertTriangle,
   RotateCw,
@@ -24,6 +25,12 @@ import {
   FileEdit,
   Upload,
   Sparkles,
+  Calendar,
+  CalendarDays,
+  History,
+  TrendingUp,
+  Award,
+  Info,
 } from 'lucide-react';
 import AttendanceCorrectionModal from './AttendanceCorrectionModal';
 
@@ -55,7 +62,12 @@ export default function StaffClockInOut() {
   const { currentUser } = useAuth();
   const [property, setProperty] = useState<Property | null>(null);
   const [attendance, setAttendance] = useState<AttendanceRecord | null>(null);
+  const [historyRecords, setHistoryRecords] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
 
   // Active action modal/flow: null | 'clock_in' | 'clock_out'
   const [activeAction, setActiveAction] = useState<'clock_in' | 'clock_out' | null>(null);
@@ -79,6 +91,7 @@ export default function StaffClockInOut() {
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [showCorrectionModal, setShowCorrectionModal] = useState<boolean>(false);
+  const [correctionTargetDate, setCorrectionTargetDate] = useState<string>('');
 
   const todayStr = new Date().toISOString().split('T')[0];
 
@@ -101,7 +114,7 @@ export default function StaffClockInOut() {
     };
   }, []);
 
-  // 1. Load today's AttendanceRecord for the current user (via getAttendanceByUser filtered to today's date)
+  // 1. Load today's AttendanceRecord and past history for the current user
   const loadData = async () => {
     if (!currentUser) return;
     try {
@@ -112,6 +125,7 @@ export default function StaffClockInOut() {
       ]);
       const todayRecord = userRecords.find((r) => r.date === todayStr) || null;
       setAttendance(todayRecord);
+      setHistoryRecords(userRecords);
       setProperty(prop);
     } catch (err) {
       console.error('Failed to load attendance or property', err);
@@ -123,6 +137,34 @@ export default function StaffClockInOut() {
   useEffect(() => {
     loadData();
   }, [currentUser?.id, currentUser?.propertyId]);
+
+  // Compute monthly statistics
+  const monthlyRecords = useMemo(() => {
+    return historyRecords
+      .filter((r) => r.date.startsWith(selectedMonth))
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [historyRecords, selectedMonth]);
+
+  const monthStats = useMemo(() => {
+    const present = monthlyRecords.filter((r) => r.status === 'present').length;
+    const halfDay = monthlyRecords.filter((r) => r.status === 'half_day').length;
+    const weekOff = monthlyRecords.filter((r) => r.status === 'week_off').length;
+    const onLeave = monthlyRecords.filter((r) => r.status === 'on_leave').length;
+    const absent = monthlyRecords.filter((r) => r.status === 'absent').length;
+    const lateCount = monthlyRecords.filter((r) => (r.lateMinutes || 0) > 15).length;
+    const totalLateMinutes = monthlyRecords.reduce((acc, r) => acc + (r.lateMinutes || 0), 0);
+
+    return {
+      present,
+      halfDay,
+      weekOff,
+      onLeave,
+      absent,
+      lateCount,
+      totalLateMinutes,
+      totalMarked: monthlyRecords.length,
+    };
+  }, [monthlyRecords]);
 
   // Request camera access and stream live feed with resilient fallbacks
   const startCamera = async () => {
@@ -412,12 +454,17 @@ export default function StaffClockInOut() {
         clockOutTime: null,
         clockOutSelfieUrl: null,
         status: 'present',
+        shiftStatus: 'in_progress',
+        scheduledShiftStart: currentUser.shiftStart,
+        scheduledShiftEnd: currentUser.shiftEnd,
         markedBy: null,
       });
 
       setAttendance(saved);
       window.dispatchEvent(new CustomEvent('attendance-updated', { detail: { date: todayStr } }));
-      setMessage({ type: 'success', text: `Successfully clocked in at ${nowTime}!` });
+      
+      const lateNotice = saved.lateMinutes > 15 ? ` (Late by ${saved.lateMinutes} mins - Pending Review)` : '';
+      setMessage({ type: 'success', text: `Successfully clocked in at ${nowTime}! Status: Present${lateNotice}` });
       handleCloseAction();
       setTimeout(() => setMessage(null), 5000);
     } catch (err) {
@@ -450,7 +497,10 @@ export default function StaffClockInOut() {
         clockInLng: attendance.clockInLng,
         clockOutTime: nowTime,
         clockOutSelfieUrl: capturedSelfie,
-        status: 'shift_completed',
+        status: attendance.status || 'present',
+        shiftStatus: 'completed',
+        scheduledShiftStart: attendance.scheduledShiftStart || currentUser.shiftStart,
+        scheduledShiftEnd: attendance.scheduledShiftEnd || currentUser.shiftEnd,
         markedBy: attendance.markedBy,
       });
 
@@ -641,7 +691,7 @@ export default function StaffClockInOut() {
                   />
                 )}
                 <div className="space-y-1 text-xs">
-                  <div className="text-slate-300 font-medium">Status: Shift Completed</div>
+                  <div className="text-slate-300 font-medium">Status: Present (Shift Completed)</div>
                   <div className="text-[11px] text-emerald-400 flex items-center gap-1">
                     <CheckCircle className="w-3.5 h-3.5 shrink-0" />
                     <span>Clock Out Logged</span>
@@ -702,7 +752,10 @@ export default function StaffClockInOut() {
           <button
             id="btn-open-correction-modal"
             type="button"
-            onClick={() => setShowCorrectionModal(true)}
+            onClick={() => {
+              setCorrectionTargetDate('');
+              setShowCorrectionModal(true);
+            }}
             className="px-3 py-1.5 rounded-lg bg-blue-950/80 hover:bg-blue-900 border border-blue-800/80 text-blue-300 text-xs font-semibold transition cursor-pointer flex items-center justify-center gap-1.5 self-start sm:self-auto shrink-0"
           >
             <FileEdit className="w-3.5 h-3.5" />
@@ -711,9 +764,250 @@ export default function StaffClockInOut() {
         </div>
       </div>
 
+      {/* Monthly Attendance Summary & Breakdown */}
+      <div className="rounded-2xl bg-slate-900 border border-slate-800 p-5 sm:p-6 shadow-sm space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+          <div className="space-y-0.5">
+            <h3 className="font-bold text-base text-white flex items-center gap-2">
+              <CalendarDays className="w-4 h-4 text-indigo-400" />
+              My Monthly Attendance Summary
+            </h3>
+            <p className="text-xs text-slate-400">
+              Overview of your shifts, week-offs, approved leaves, and punctuality for the selected month.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            <Calendar className="w-3.5 h-3.5 text-slate-400" />
+            <input
+              id="staff-month-select"
+              type="month"
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value)}
+              className="bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+            />
+          </div>
+        </div>
+
+        {/* 6 Metric Stat Cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 text-center">
+            <div className="text-[11px] text-slate-400 font-medium">Logged Records</div>
+            <div className="text-lg font-bold text-white font-mono mt-0.5">{monthStats.totalMarked}</div>
+            <div className="text-[10px] text-slate-500 mt-0.5">Days Recorded</div>
+          </div>
+          <div className="p-3 rounded-xl bg-emerald-950/20 border border-emerald-900/40 text-center">
+            <div className="text-[11px] text-emerald-400 font-medium">Present (Full)</div>
+            <div className="text-lg font-bold text-emerald-300 font-mono mt-0.5">{monthStats.present}</div>
+            <div className="text-[10px] text-emerald-500/80 mt-0.5">Full Shifts</div>
+          </div>
+          <div className="p-3 rounded-xl bg-amber-950/20 border border-amber-900/40 text-center">
+            <div className="text-[11px] text-amber-400 font-medium">Half Day</div>
+            <div className="text-lg font-bold text-amber-300 font-mono mt-0.5">{monthStats.halfDay}</div>
+            <div className="text-[10px] text-amber-500/80 mt-0.5">Half Shifts</div>
+          </div>
+          <div className="p-3 rounded-xl bg-sky-950/20 border border-sky-900/40 text-center">
+            <div className="text-[11px] text-sky-400 font-medium">Week Offs</div>
+            <div className="text-lg font-bold text-sky-300 font-mono mt-0.5">{monthStats.weekOff}</div>
+            <div className="text-[10px] text-sky-500/80 mt-0.5">4/mo Quota</div>
+          </div>
+          <div className="p-3 rounded-xl bg-violet-950/20 border border-violet-900/40 text-center">
+            <div className="text-[11px] text-violet-400 font-medium">On Leave</div>
+            <div className="text-lg font-bold text-violet-300 font-mono mt-0.5">{monthStats.onLeave}</div>
+            <div className="text-[10px] text-violet-500/80 mt-0.5">Approved</div>
+          </div>
+          <div className="p-3 rounded-xl bg-rose-950/20 border border-rose-900/40 text-center">
+            <div className="text-[11px] text-rose-400 font-medium">Absences</div>
+            <div className="text-lg font-bold text-rose-300 font-mono mt-0.5">{monthStats.absent}</div>
+            <div className="text-[10px] text-rose-500/80 mt-0.5">Unapproved</div>
+          </div>
+        </div>
+
+        {/* Punctuality and Late Arrival Callout if any */}
+        {monthStats.lateCount > 0 && (
+          <div className="p-3 rounded-xl bg-orange-950/20 border border-orange-900/30 flex items-center justify-between text-xs text-orange-300">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-orange-400 shrink-0" />
+              <span>
+                You have <strong className="text-white">{monthStats.lateCount} late arrival{monthStats.lateCount > 1 ? 's' : ''}</strong> (&gt; 15m) totaling <strong className="text-white font-mono">{monthStats.totalLateMinutes} mins</strong> this month.
+              </span>
+            </div>
+            <span className="text-[11px] text-orange-400/80 hidden sm:inline">
+              Late penalties require Manager review before any payroll deductions.
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Monthly Punch History Log Table */}
+      <div className="rounded-2xl bg-slate-900 border border-slate-800 p-5 sm:p-6 shadow-sm space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+          <div className="space-y-0.5">
+            <h3 className="font-bold text-base text-white flex items-center gap-2">
+              <History className="w-4 h-4 text-indigo-400" />
+              Shift Punch Logs &amp; Past Records
+            </h3>
+            <p className="text-xs text-slate-400">
+              Detailed list of punches, selfies, work hours, and manager reviews for {selectedMonth}.
+            </p>
+          </div>
+        </div>
+
+        {monthlyRecords.length === 0 ? (
+          <div className="py-8 text-center bg-slate-950/40 rounded-xl border border-slate-800/60 p-6 space-y-3">
+            <Calendar className="w-8 h-8 text-slate-600 mx-auto" />
+            <p className="text-xs text-slate-400">
+              No attendance records logged yet for {selectedMonth}.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setCorrectionTargetDate('');
+                setShowCorrectionModal(true);
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/80 hover:bg-indigo-600 text-white text-xs font-semibold cursor-pointer"
+            >
+              <FileEdit className="w-3.5 h-3.5" />
+              Submit Attendance Request
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            {monthlyRecords.map((record) => {
+              const formattedDate = new Date(record.date + 'T00:00:00').toLocaleDateString('en-US', {
+                weekday: 'short',
+                month: 'short',
+                day: 'numeric',
+              });
+
+              return (
+                <div
+                  key={record.id || record.date}
+                  className={`p-3.5 rounded-xl border transition flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                    record.date === todayStr
+                      ? 'bg-slate-950/90 border-indigo-900/60 ring-1 ring-indigo-500/20'
+                      : 'bg-slate-950/50 border-slate-800/80 hover:border-slate-700'
+                  }`}
+                >
+                  {/* Left: Date & Status */}
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-slate-900 border border-slate-800 flex flex-col items-center justify-center text-center shrink-0">
+                      <span className="text-[9px] uppercase font-bold text-slate-400">
+                        {formattedDate.split(' ')[0]}
+                      </span>
+                      <span className="text-xs font-bold text-white font-mono leading-none">
+                        {record.date.split('-')[2]}
+                      </span>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-slate-200">{record.date}</span>
+                        {record.date === todayStr && (
+                          <span className="px-2 py-0.2 rounded-full bg-indigo-950 border border-indigo-800 text-indigo-300 text-[10px] font-semibold">
+                            Today
+                          </span>
+                        )}
+                        {/* Attendance Status Badge */}
+                        {record.status === 'present' ? (
+                          <span className="px-2 py-0.5 rounded-md bg-emerald-950/80 border border-emerald-800 text-emerald-300 text-[11px] font-semibold flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3" /> Present
+                          </span>
+                        ) : record.status === 'half_day' ? (
+                          <span className="px-2 py-0.5 rounded-md bg-amber-950/80 border border-amber-800 text-amber-300 text-[11px] font-semibold flex items-center gap-1">
+                            <Clock className="w-3 h-3" /> Half Day
+                          </span>
+                        ) : record.status === 'week_off' ? (
+                          <span className="px-2 py-0.5 rounded-md bg-sky-950/80 border border-sky-800 text-sky-300 text-[11px] font-semibold flex items-center gap-1">
+                            <Calendar className="w-3 h-3" /> Week Off
+                          </span>
+                        ) : record.status === 'on_leave' ? (
+                          <span className="px-2 py-0.5 rounded-md bg-violet-950/80 border border-violet-800 text-violet-300 text-[11px] font-semibold flex items-center gap-1">
+                            <CalendarDays className="w-3 h-3" /> On Leave
+                          </span>
+                        ) : record.status === 'absent' ? (
+                          <span className="px-2 py-0.5 rounded-md bg-rose-950/80 border border-rose-800 text-rose-300 text-[11px] font-semibold flex items-center gap-1">
+                            <AlertCircle className="w-3 h-3" /> Absent
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-400 text-[11px] font-medium">
+                            Unmarked
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Punches & Notes */}
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
+                        {record.clockInTime && (
+                          <span className="flex items-center gap-1 font-mono text-[11px] text-slate-300">
+                            <ClockInIcon className="w-3 h-3 text-blue-400" />
+                            In: {record.clockInTime}
+                          </span>
+                        )}
+                        {record.clockOutTime && (
+                          <span className="flex items-center gap-1 font-mono text-[11px] text-slate-300">
+                            <ClockOutIcon className="w-3 h-3 text-emerald-400" />
+                            Out: {record.clockOutTime}
+                          </span>
+                        )}
+                        {(record.lateMinutes || 0) > 15 && (
+                          <span className="text-orange-400 font-medium text-[11px]">
+                            Late: {record.lateMinutes}m
+                            {record.latePenaltyStatus === 'approved' ? ' (Penalty Applied)' : record.latePenaltyStatus === 'rejected' ? ' (Penalty Waived)' : ''}
+                          </span>
+                        )}
+                        {record.managerAdjusted && (
+                          <span className="text-indigo-300 text-[11px] flex items-center gap-0.5">
+                            <ShieldCheck className="w-3 h-3 text-indigo-400" /> Manager Verified
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right: Selfies thumbnail & action */}
+                  <div className="flex items-center gap-2 self-end sm:self-auto">
+                    {record.clockInSelfieUrl && (
+                      <img
+                        src={record.clockInSelfieUrl}
+                        alt="Clock In"
+                        title="Clock In Selfie"
+                        className="w-8 h-8 rounded-lg object-cover border border-slate-700 shrink-0"
+                      />
+                    )}
+                    {record.clockOutSelfieUrl && (
+                      <img
+                        src={record.clockOutSelfieUrl}
+                        alt="Clock Out"
+                        title="Clock Out Selfie"
+                        className="w-8 h-8 rounded-lg object-cover border border-slate-700 shrink-0"
+                      />
+                    )}
+                    {(!record.clockInTime || !record.clockOutTime || record.status === 'absent') && record.date !== todayStr && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCorrectionTargetDate(record.date);
+                          setShowCorrectionModal(true);
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium cursor-pointer"
+                        title="Request correction for this date"
+                      >
+                        Correct
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* Attendance Correction Request Modal */}
       <AttendanceCorrectionModal
         isOpen={showCorrectionModal}
+        initialDate={correctionTargetDate}
         onClose={() => setShowCorrectionModal(false)}
         onSubmitted={() => {
           loadData();

@@ -192,11 +192,11 @@ export default function PlaceholderDashboard() {
 
         {/* Owner Navigation Tabs */}
         {isOwner && (
-          <div className="flex items-center gap-2 mb-6 p-1 bg-slate-900/80 border border-slate-800 rounded-xl w-full">
+          <div className="flex flex-wrap sm:flex-nowrap items-center gap-1.5 sm:gap-2 mb-6 p-1 bg-slate-900/80 border border-slate-800 rounded-xl w-full">
             <button
               id="tab-overview"
               onClick={() => setActiveTab('overview')}
-              className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+              className={`flex-1 min-w-[80px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
                 activeTab === 'overview'
                   ? 'bg-purple-600 text-white shadow'
                   : 'text-slate-400 hover:text-slate-200'
@@ -208,7 +208,7 @@ export default function PlaceholderDashboard() {
             <button
               id="tab-tasks"
               onClick={() => setActiveTab('tasks')}
-              className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+              className={`flex-1 min-w-[90px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
                 activeTab === 'tasks'
                   ? 'bg-purple-600 text-white shadow'
                   : 'text-slate-400 hover:text-slate-200'
@@ -220,7 +220,7 @@ export default function PlaceholderDashboard() {
             <button
               id="tab-leave"
               onClick={() => setActiveTab('leave')}
-              className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+              className={`flex-1 min-w-[90px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
                 activeTab === 'leave'
                   ? 'bg-purple-600 text-white shadow'
                   : 'text-slate-400 hover:text-slate-200'
@@ -230,9 +230,21 @@ export default function PlaceholderDashboard() {
               Leave Management
             </button>
             <button
+              id="tab-owner-attendance"
+              onClick={() => setActiveTab('attendance')}
+              className={`flex-1 min-w-[90px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                activeTab === 'attendance'
+                  ? 'bg-purple-600 text-white shadow'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <CalendarCheck className="w-3.5 h-3.5" />
+              Staff Attendance
+            </button>
+            <button
               id="tab-properties"
               onClick={() => setActiveTab('properties')}
-              className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+              className={`flex-1 min-w-[80px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
                 activeTab === 'properties'
                   ? 'bg-purple-600 text-white shadow'
                   : 'text-slate-400 hover:text-slate-200'
@@ -244,7 +256,7 @@ export default function PlaceholderDashboard() {
             <button
               id="tab-staff"
               onClick={() => setActiveTab('staff')}
-              className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+              className={`flex-1 min-w-[80px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
                 activeTab === 'staff'
                   ? 'bg-purple-600 text-white shadow'
                   : 'text-slate-400 hover:text-slate-200'
@@ -537,7 +549,7 @@ export default function PlaceholderDashboard() {
           )
         ) : isOwner && activeTab === 'properties' ? (
           <OwnerPropertyManagement />
-        ) : isManager && activeTab === 'attendance' ? (
+        ) : (isOwner || isManager) && activeTab === 'attendance' ? (
           <ManagerAttendanceReview
             initialDate={attendanceReviewInitialDate}
             onAttendanceMarked={checkAlerts}
