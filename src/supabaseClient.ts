@@ -1,24 +1,20 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { isProduction, getSupabaseConfig } from './config/env';
+import { getSupabaseConfig } from './config/env';
 
 const config = getSupabaseConfig();
 
 export const isSupabaseConfigured = config.isConfigured;
 
-// Fail-safe client initialization:
-// In development, we use dummy values if credentials aren't provided because
-// all queries route to local mock storage.
-// In production, real credentials are used.
-
-
+// Live Supabase Client Initialization:
+// Connected directly to the configured Supabase project instance.
 export const supabase: SupabaseClient = createClient(
   config.url || 'https://placeholder.supabase.co',
   config.anonKey || 'placeholder-anon-key',
   {
     auth: {
-      persistSession: isProduction(),
-      autoRefreshToken: isProduction(),
-      detectSessionInUrl: isProduction(),
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
     },
   }
 );

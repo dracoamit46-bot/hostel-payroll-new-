@@ -2,23 +2,16 @@
  * Centralized environment configuration and detection.
  * 
  * Rules:
- * - VITE_APP_ENV === "production" -> PRODUCTION mode (uses Supabase, Netlify functions)
- * - VITE_APP_ENV !== "production" (or missing) -> DEVELOPMENT mode (Local / Mock / In-Memory)
- * - Never infer production from hostname or other heuristics.
+ * - Always uses Supabase as the live backend database.
+ * - No mock data fallbacks.
  */
 
-export type AppEnvironment = 'development' | 'production';
+export type AppEnvironment = 'production';
 
-export const APP_ENV: AppEnvironment = 
-  import.meta.env.VITE_APP_ENV === 'production' ? 'production' : 'development';
+export const APP_ENV: AppEnvironment = 'production';
 
-export const isProduction = (): boolean => {
-  // If explicitly set to production, or if valid Supabase credentials are provided
-  const config = getSupabaseConfig();
-  return APP_ENV === 'production' || config.isConfigured;
-};
-
-export const isDevelopment = (): boolean => !isProduction();
+export const isProduction = (): boolean => true;
+export const isDevelopment = (): boolean => false;
 
 export interface SupabaseConfig {
   url: string;
@@ -66,3 +59,4 @@ export const validateProductionConfig = (): { valid: boolean; errors: string[] }
     errors,
   };
 };
+

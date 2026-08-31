@@ -1,13 +1,13 @@
 -- ==============================================================================
--- HostelOps Robust Clean Supabase Migration (Idempotent & Error-Free)
--- Run this in Supabase Dashboard -> SQL Editor
+-- HostelOps Supabase Initial Schema Migration
+-- Matches TypeScript data models in types.ts (snake_case column names)
 -- ==============================================================================
 
--- 1. EXTENSIONS
+-- 1. Enable required PostgreSQL extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- 2. TABLES
+-- 2. Properties Table
 CREATE TABLE IF NOT EXISTS public.properties (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS public.properties (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
+-- 3. Users Table (Compatible with both pre-created staff and Supabase auth.users)
 CREATE TABLE IF NOT EXISTS public.users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
@@ -32,6 +33,7 @@ CREATE TABLE IF NOT EXISTS public.users (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
+-- 4. Task Categories Table
 CREATE TABLE IF NOT EXISTS public.task_categories (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     property_id UUID NOT NULL REFERENCES public.properties(id) ON DELETE CASCADE,
@@ -39,6 +41,7 @@ CREATE TABLE IF NOT EXISTS public.task_categories (
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
+-- 5. Tasks Table
 CREATE TABLE IF NOT EXISTS public.tasks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     property_id UUID NOT NULL REFERENCES public.properties(id) ON DELETE CASCADE,
@@ -53,6 +56,7 @@ CREATE TABLE IF NOT EXISTS public.tasks (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
+-- 6. Vouchers Table (Financial claims / settlements linked to tasks)
 CREATE TABLE IF NOT EXISTS public.vouchers (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     task_id UUID NOT NULL REFERENCES public.tasks(id) ON DELETE CASCADE,
@@ -62,6 +66,7 @@ CREATE TABLE IF NOT EXISTS public.vouchers (
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
+-- 7. Attendance Records Table
 CREATE TABLE IF NOT EXISTS public.attendance_records (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
@@ -79,6 +84,7 @@ CREATE TABLE IF NOT EXISTS public.attendance_records (
     CONSTRAINT uq_attendance_user_date UNIQUE (user_id, date)
 );
 
+-- 8. Week Off Requests Table
 CREATE TABLE IF NOT EXISTS public.week_off_requests (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
@@ -90,6 +96,7 @@ CREATE TABLE IF NOT EXISTS public.week_off_requests (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
+-- 9. Leave Requests Table
 CREATE TABLE IF NOT EXISTS public.leave_requests (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
@@ -103,6 +110,7 @@ CREATE TABLE IF NOT EXISTS public.leave_requests (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
+-- 10. Attendance Correction Requests Table
 CREATE TABLE IF NOT EXISTS public.attendance_correction_requests (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
@@ -114,113 +122,41 @@ CREATE TABLE IF NOT EXISTS public.attendance_correction_requests (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
--- 3. INDEXES
+-- ==============================================================================
+-- INDEXES FOR HIGH-PERFORMANCE QUERYING
+-- ==============================================================================
 CREATE INDEX IF NOT EXISTS idx_users_phone ON public.users(phone);
 CREATE INDEX IF NOT EXISTS idx_users_property_id ON public.users(property_id);
 CREATE INDEX IF NOT EXISTS idx_users_role ON public.users(role);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_property_id ON public.tasks(property_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON public.tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_created_by ON public.tasks(created_by);
+
 CREATE INDEX IF NOT EXISTS idx_attendance_user_date ON public.attendance_records(user_id, date);
+CREATE INDEX IF NOT EXISTS idx_attendance_date ON public.attendance_records(date);
 
--- 4. ROW LEVEL SECURITY (RLS)
-ALTER TABLE public.properties ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.task_categories ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.tasks ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.vouchers ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.attendance_records ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.week_off_requests ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.leave_requests ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.attendance_correction_requests ENABLE ROW LEVEL SECURITY;
+CREATE INDEX IF NOT EXISTS idx_leave_user ON public.leave_requests(user_id);
+CREATE INDEX IF NOT EXISTS idx_leave_status ON public.leave_requests(status);
 
--- Helper functions for RLS
-CREATE OR REPLACE FUNCTION public.current_user_role()
-RETURNS TEXT AS $$
-  SELECT COALESCE(
-    (SELECT role FROM public.users WHERE id = auth.uid()),
-    (auth.jwt() -> 'user_metadata' ->> 'role'),
-    (auth.jwt() -> 'app_metadata' ->> 'role'),
-    CASE WHEN auth.role() = 'anon' THEN 'anon' ELSE 'authenticated' END
-  );
-$$ LANGUAGE sql STABLE SECURITY DEFINER;
+CREATE INDEX IF NOT EXISTS idx_week_off_user ON public.week_off_requests(user_id);
+CREATE INDEX IF NOT EXISTS idx_correction_user ON public.attendance_correction_requests(user_id);
 
-CREATE OR REPLACE FUNCTION public.current_user_property()
-RETURNS UUID AS $$
-  SELECT COALESCE(
-    (SELECT property_id FROM public.users WHERE id = auth.uid()),
-    NULLIF(auth.jwt() -> 'user_metadata' ->> 'property_id', '')::UUID,
-    NULLIF(auth.jwt() -> 'app_metadata' ->> 'property_id', '')::UUID
-  );
-$$ LANGUAGE sql STABLE SECURITY DEFINER;
-
--- Drop all existing policies cleanly
-DO $$
-DECLARE
-    pol RECORD;
+-- ==============================================================================
+-- UPDATED_AT TRIGGER FUNCTION
+-- ==============================================================================
+CREATE OR REPLACE FUNCTION public.handle_updated_at()
+RETURNS TRIGGER AS $$
 BEGIN
-    FOR pol IN
-        SELECT schemaname, tablename, policyname
-        FROM pg_policies
-        WHERE schemaname = 'public'
-    LOOP
-        EXECUTE format('DROP POLICY IF EXISTS %I ON %I.%I', pol.policyname, pol.schemaname, pol.tablename);
-    END LOOP;
-END $$;
+    NEW.updated_at = timezone('utc'::text, now());
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
--- Create Policies
-CREATE POLICY "properties_read_all"
-ON public.properties FOR SELECT TO authenticated, anon USING (true);
-
-CREATE POLICY "properties_modify_all"
-ON public.properties FOR ALL TO authenticated, anon USING (true) WITH CHECK (true);
-
-CREATE POLICY "users_read_all"
-ON public.users FOR SELECT TO authenticated, anon USING (true);
-
-CREATE POLICY "users_insert_all"
-ON public.users FOR INSERT TO authenticated, anon WITH CHECK (true);
-
-CREATE POLICY "users_update_all"
-ON public.users FOR UPDATE TO authenticated, anon USING (true) WITH CHECK (true);
-
-CREATE POLICY "users_delete_all"
-ON public.users FOR DELETE TO authenticated, anon USING (true);
-
-CREATE POLICY "users_modify_all"
-ON public.users FOR ALL TO authenticated, anon USING (true) WITH CHECK (true);
-
-CREATE POLICY "task_categories_read_all"
-ON public.task_categories FOR SELECT TO authenticated, anon USING (true);
-
-CREATE POLICY "task_categories_modify_all"
-ON public.task_categories FOR ALL TO authenticated, anon USING (true) WITH CHECK (true);
-
-CREATE POLICY "tasks_read_all"
-ON public.tasks FOR SELECT TO authenticated, anon USING (true);
-
-CREATE POLICY "tasks_insert_all"
-ON public.tasks FOR INSERT TO authenticated, anon WITH CHECK (true);
-
-CREATE POLICY "tasks_update_all"
-ON public.tasks FOR UPDATE TO authenticated, anon USING (true) WITH CHECK (true);
-
-CREATE POLICY "tasks_delete_all"
-ON public.tasks FOR DELETE TO authenticated, anon USING (true);
-
-CREATE POLICY "tasks_modify_all"
-ON public.tasks FOR ALL TO authenticated, anon USING (true) WITH CHECK (true);
-
-CREATE POLICY "vouchers_all"
-ON public.vouchers FOR ALL TO authenticated, anon USING (true) WITH CHECK (true);
-
-CREATE POLICY "attendance_records_all"
-ON public.attendance_records FOR ALL TO authenticated, anon USING (true) WITH CHECK (true);
-
-CREATE POLICY "leave_requests_all"
-ON public.leave_requests FOR ALL TO authenticated, anon USING (true) WITH CHECK (true);
-
-CREATE POLICY "week_off_requests_all"
-ON public.week_off_requests FOR ALL TO authenticated, anon USING (true) WITH CHECK (true);
-
-CREATE POLICY "attendance_correction_all"
-ON public.attendance_correction_requests FOR ALL TO authenticated, anon USING (true) WITH CHECK (true);
+CREATE OR REPLACE TRIGGER tr_properties_updated_at BEFORE UPDATE ON public.properties FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+CREATE OR REPLACE TRIGGER tr_users_updated_at BEFORE UPDATE ON public.users FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+CREATE OR REPLACE TRIGGER tr_tasks_updated_at BEFORE UPDATE ON public.tasks FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+CREATE OR REPLACE TRIGGER tr_attendance_updated_at BEFORE UPDATE ON public.attendance_records FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+CREATE OR REPLACE TRIGGER tr_week_off_updated_at BEFORE UPDATE ON public.week_off_requests FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+CREATE OR REPLACE TRIGGER tr_leave_updated_at BEFORE UPDATE ON public.leave_requests FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+CREATE OR REPLACE TRIGGER tr_correction_updated_at BEFORE UPDATE ON public.attendance_correction_requests FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
