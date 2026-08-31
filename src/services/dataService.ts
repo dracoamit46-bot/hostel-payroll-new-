@@ -804,7 +804,6 @@ export const dataService = {
         scheduled_shift_start: shiftStart,
         scheduled_shift_end: shiftEnd,
         worked_minutes: workedMinutes,
-        total_hours: totalHours > 0 ? totalHours : null,
         late_minutes: lateMinutes,
         late_penalty_eligible: latePenaltyEligible,
         late_penalty_status: latePenaltyStatus,
