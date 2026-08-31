@@ -1,5 +1,12 @@
 export type UserRole = 'owner' | 'manager' | 'inventory_manager' | 'staff';
-export type AttendanceStatus = 'shift_completed' | 'week_off' | 'on_leave' | 'absent';
+export type AttendanceStatus =
+  | 'shift_completed'
+  | 'week_off'
+  | 'on_leave'
+  | 'absent'
+  | 'present'
+  | 'half_day'
+  | 'late';
 export type TaskStatus = 'created' | 'pending_approval' | 'approved' | 'completed' | 'rejected';
 export type PaymentType = 'no_payment' | 'petty_cash' | 'head_office';
 export type RequestStatus = 'pending' | 'approved' | 'rejected';

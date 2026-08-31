@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS public.attendance_records (
     clock_in_lng DOUBLE PRECISION,
     clock_out_time TEXT,
     clock_out_selfie_url TEXT,
-    status TEXT CHECK (status IS NULL OR status IN ('shift_completed', 'week_off', 'on_leave', 'absent', 'present', 'half_day', 'late')),
+    status TEXT DEFAULT 'present' CHECK (status IS NULL OR status IN ('shift_completed', 'week_off', 'on_leave', 'absent', 'present', 'half_day', 'late')),
     marked_by UUID REFERENCES public.users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),

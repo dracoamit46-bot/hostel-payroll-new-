@@ -609,6 +609,10 @@ export const dataService = {
         }
       }
 
+      // Ensure status is never null if the table enforces a NOT NULL constraint
+      const safeStatus =
+        record.status ?? (record.clockOutTime ? 'shift_completed' : 'present');
+
       const payload = {
         user_id: record.userId,
         date: record.date,
@@ -618,7 +622,7 @@ export const dataService = {
         clock_in_lng: record.clockInLng,
         clock_out_time: record.clockOutTime,
         clock_out_selfie_url: record.clockOutSelfieUrl,
-        status: record.status,
+        status: safeStatus,
         marked_by: markedBy,
       };
 

@@ -242,6 +242,9 @@ export default function ManagerAttendanceReview({
         week_off: 'Week Off',
         on_leave: 'On Leave',
         absent: 'Absent',
+        present: 'Present',
+        half_day: 'Half Day',
+        late: 'Late',
       };
 
       setNotification({

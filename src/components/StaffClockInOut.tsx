@@ -411,7 +411,7 @@ export default function StaffClockInOut() {
         clockInLng: locLng,
         clockOutTime: null,
         clockOutSelfieUrl: null,
-        status: null,
+        status: 'present',
         markedBy: null,
       });
 

@@ -19,18 +19,32 @@ export interface SupabaseConfig {
   isConfigured: boolean;
 }
 
+function sanitizeEnvValue(val: any): string {
+  if (typeof val !== 'string') return '';
+  return val
+    .trim()
+    // Strip leading/trailing quotes including double, single, backticks, smart/curly quotes
+    .replace(/^["'`“”‘’]+|["'`“”‘’]+$/g, '')
+    // Strip any non-printable or non-ASCII characters (e.g. zero-width spaces, smart chars)
+    .replace(/[^\x20-\x7E]/g, '')
+    .trim();
+}
+
 export const getSupabaseConfig = (): SupabaseConfig => {
-  const url =
+  const rawUrl =
     (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) ||
     (typeof import.meta !== 'undefined' && import.meta.env?.SUPABASE_URL) ||
     '';
 
-  const anonKey =
+  const rawAnonKey =
     (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) ||
     (typeof import.meta !== 'undefined' && import.meta.env?.SUPABASE_ANON_KEY) ||
     (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_KEY) ||
     (typeof import.meta !== 'undefined' && import.meta.env?.SUPABASE_KEY) ||
     '';
+
+  const url = sanitizeEnvValue(rawUrl);
+  const anonKey = sanitizeEnvValue(rawAnonKey);
 
   const isConfigured = Boolean(
     url &&

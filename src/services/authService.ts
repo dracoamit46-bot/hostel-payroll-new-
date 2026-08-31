@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import { User } from '../types';
 import {
   supabase,
+  safeFetch,
   formatInternalEmail,
   extractPhoneDigitsFromEmail,
 } from '../supabaseClient';
@@ -30,6 +31,9 @@ const getIsolatedAuthClient = () => {
           setItem: () => {},
           removeItem: () => {},
         },
+      },
+      global: {
+        fetch: safeFetch,
       },
     }
   );
