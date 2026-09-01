@@ -5,6 +5,9 @@ import {
   getAttendanceByUserAndDate,
   getUsersByProperty,
   getAttendanceCorrectionRequestsByProperty,
+  getTasks,
+  getLeaveRequests,
+  getAttendanceCorrectionRequests,
 } from '../services/dataService';
 import { Property } from '../types';
 import {
@@ -26,6 +29,7 @@ import {
   ArrowRight,
   Calculator,
   Receipt,
+  BarChart3,
 } from 'lucide-react';
 import OwnerPropertyManagement from './OwnerPropertyManagement';
 import ManagerGeolocationSetup from './ManagerGeolocationSetup';
@@ -39,6 +43,8 @@ import UnifiedLeaveManagement from './UnifiedLeaveManagement';
 import AttendanceCorrectionModal from './AttendanceCorrectionModal';
 import PayrollManagement from './PayrollManagement';
 import StaffPayslips from './StaffPayslips';
+import ReportsDashboard from './ReportsDashboard';
+import BottomStickyMenu from './BottomStickyMenu';
 
 export default function PlaceholderDashboard() {
   const { currentUser, logout } = useAuth();
@@ -63,6 +69,7 @@ export default function PlaceholderDashboard() {
   const [managerPendingCorrectionsCount, setManagerPendingCorrectionsCount] = useState<number>(0);
   const [showStaffCorrectionModal, setShowStaffCorrectionModal] = useState<boolean>(false);
   const [attendanceReviewInitialDate, setAttendanceReviewInitialDate] = useState<string | undefined>(undefined);
+  const [totalPendingApprovals, setTotalPendingApprovals] = useState<number>(0);
 
   const checkAlerts = useCallback(async () => {
     if (!currentUser) return;
@@ -72,9 +79,11 @@ export default function PlaceholderDashboard() {
         const att = await getAttendanceByUserAndDate(currentUser.id, yesterdayDate);
         setUnmarkedYesterdayStaff(!att || !att.status);
       } else if (currentUser.role === 'manager' && currentUser.propertyId) {
-        const [users, corrections] = await Promise.all([
+        const [users, corrections, tasksList, leavesList] = await Promise.all([
           getUsersByProperty(currentUser.propertyId),
           getAttendanceCorrectionRequestsByProperty(currentUser.propertyId),
+          getTasks(),
+          getLeaveRequests(),
         ]);
 
         const staffMembers = users.filter((u) => u.role === 'staff' || u.role === 'inventory_manager');
@@ -84,11 +93,27 @@ export default function PlaceholderDashboard() {
 
         const unmarkedCount = attList.filter((a) => !a || !a.status).length;
         const pendingCorr = corrections.filter((c) => c.status === 'pending').length;
+        const pendingTasks = tasksList.filter(
+          (t) => t.propertyId === currentUser.propertyId && (t.status === 'reported' || t.status === 'assigned')
+        ).length;
+        const userIds = new Set(users.map((u) => u.id));
+        const pendingLeaves = leavesList.filter((l) => userIds.has(l.userId) && l.status === 'pending').length;
 
         setManagerUnmarkedYesterdayCount(unmarkedCount);
         setManagerYesterdayTotalStaff(staffMembers.length);
         setManagerPendingCorrectionsCount(pendingCorr);
+        setTotalPendingApprovals(pendingTasks + pendingLeaves + pendingCorr);
         setManagerAlertsLoaded(true);
+      } else if (currentUser.role === 'owner') {
+        const [tasksList, leavesList, corrList] = await Promise.all([
+          getTasks(),
+          getLeaveRequests(),
+          getAttendanceCorrectionRequests(),
+        ]);
+        const pendingTasks = tasksList.filter((t) => t.status === 'reported' || t.status === 'assigned').length;
+        const pendingLeaves = leavesList.filter((l) => l.status === 'pending').length;
+        const pendingCorr = corrList.filter((c) => c.status === 'pending').length;
+        setTotalPendingApprovals(pendingTasks + pendingLeaves + pendingCorr);
       }
     } catch (err) {
       console.error('Failed to check attendance alerts', err);
@@ -181,7 +206,7 @@ export default function PlaceholderDashboard() {
             <span>{propertyName}</span>
           </div>
 
-          {/* Right: User Switcher / Logout */}
+          {/* Right: Logout */}
           <div className="flex items-center gap-2">
             <button
               id="btn-logout"
@@ -189,268 +214,10 @@ export default function PlaceholderDashboard() {
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold border border-slate-700/80 transition-all cursor-pointer shadow-xs"
             >
               <LogOut className="w-3.5 h-3.5" />
-              <span>Switch User</span>
+              <span>Logout</span>
             </button>
           </div>
         </div>
-
-        {/* Owner Navigation Tabs */}
-        {isOwner && (
-          <div className="flex flex-wrap sm:flex-nowrap items-center gap-1.5 sm:gap-2 mb-6 p-1 bg-slate-900/80 border border-slate-800 rounded-xl w-full">
-            <button
-              id="tab-overview"
-              onClick={() => setActiveTab('overview')}
-              className={`flex-1 min-w-[80px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'overview'
-                  ? 'bg-purple-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <LayoutDashboard className="w-3.5 h-3.5" />
-              Overview
-            </button>
-            <button
-              id="tab-tasks"
-              onClick={() => setActiveTab('tasks')}
-              className={`flex-1 min-w-[90px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'tasks'
-                  ? 'bg-purple-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <ClipboardList className="w-3.5 h-3.5" />
-              Tasks &amp; Approvals
-            </button>
-            <button
-              id="tab-leave"
-              onClick={() => setActiveTab('leave')}
-              className={`flex-1 min-w-[90px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'leave'
-                  ? 'bg-purple-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Palmtree className="w-3.5 h-3.5" />
-              Leave Management
-            </button>
-            <button
-              id="tab-owner-payroll"
-              onClick={() => setActiveTab('payroll')}
-              className={`flex-1 min-w-[90px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'payroll'
-                  ? 'bg-emerald-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Calculator className="w-3.5 h-3.5" />
-              Payroll
-            </button>
-            <button
-              id="tab-owner-attendance"
-              onClick={() => setActiveTab('attendance')}
-              className={`flex-1 min-w-[90px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'attendance'
-                  ? 'bg-purple-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <CalendarCheck className="w-3.5 h-3.5" />
-              Staff Attendance
-            </button>
-            <button
-              id="tab-properties"
-              onClick={() => setActiveTab('properties')}
-              className={`flex-1 min-w-[80px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'properties'
-                  ? 'bg-purple-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Building2 className="w-3.5 h-3.5" />
-              Properties
-            </button>
-            <button
-              id="tab-staff"
-              onClick={() => setActiveTab('staff')}
-              className={`flex-1 min-w-[80px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'staff'
-                  ? 'bg-purple-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Users className="w-3.5 h-3.5" />
-              Employees
-            </button>
-          </div>
-        )}
-
-        {/* Manager Navigation Tabs */}
-        {isManager && (
-          <div className="flex flex-wrap sm:flex-nowrap items-center gap-1.5 sm:gap-2 mb-6 p-1 bg-slate-900/80 border border-slate-800 rounded-xl w-full">
-            <button
-              id="tab-mgr-overview"
-              onClick={() => setActiveTab('overview')}
-              className={`flex-1 min-w-[90px] py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'overview'
-                  ? 'bg-blue-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <LayoutDashboard className="w-3.5 h-3.5" />
-              Overview
-            </button>
-            <button
-              id="tab-mgr-tasks"
-              onClick={() => setActiveTab('tasks')}
-              className={`flex-1 min-w-[100px] py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'tasks'
-                  ? 'bg-blue-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <ClipboardList className="w-3.5 h-3.5" />
-              Tasks &amp; Approvals
-            </button>
-            <button
-              id="tab-mgr-leave"
-              onClick={() => setActiveTab('leave')}
-              className={`flex-1 min-w-[100px] py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'leave'
-                  ? 'bg-blue-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Palmtree className="w-3.5 h-3.5" />
-              Leave Approvals
-            </button>
-            <button
-              id="tab-mgr-payroll"
-              onClick={() => setActiveTab('payroll')}
-              className={`flex-1 min-w-[90px] py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'payroll'
-                  ? 'bg-emerald-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Calculator className="w-3.5 h-3.5" />
-              Payroll
-            </button>
-            <button
-              id="tab-mgr-attendance"
-              onClick={() => setActiveTab('attendance')}
-              className={`flex-1 min-w-[110px] py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'attendance'
-                  ? 'bg-blue-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <CalendarCheck className="w-3.5 h-3.5" />
-              Attendance
-            </button>
-            <button
-              id="tab-mgr-weekoff"
-              onClick={() => setActiveTab('weekoff_approval')}
-              className={`flex-1 min-w-[110px] py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'weekoff_approval'
-                  ? 'bg-blue-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Palmtree className="w-3.5 h-3.5" />
-              Week-Offs
-            </button>
-            <button
-              id="tab-mgr-geolocation"
-              onClick={() => setActiveTab('geolocation')}
-              className={`flex-1 min-w-[95px] py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'geolocation'
-                  ? 'bg-blue-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Compass className="w-3.5 h-3.5" />
-              Geolocation
-            </button>
-            <button
-              id="tab-mgr-staff"
-              onClick={() => setActiveTab('staff')}
-              className={`flex-1 min-w-[80px] py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'staff'
-                  ? 'bg-blue-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Users className="w-3.5 h-3.5" />
-              Staff
-            </button>
-          </div>
-        )}
-
-        {/* Staff & Inventory Manager Navigation Tabs */}
-        {isStaffOrInvMgr && (
-          <div className="flex flex-wrap sm:flex-nowrap items-center gap-1.5 sm:gap-2 mb-6 p-1 bg-slate-900/80 border border-slate-800 rounded-xl w-full">
-            <button
-              id="tab-staff-clock"
-              onClick={() => setActiveTab('overview')}
-              className={`flex-1 min-w-[100px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'overview' || activeTab === 'clock_in_out'
-                  ? 'bg-indigo-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Clock className="w-3.5 h-3.5" />
-              Clock In / Out
-            </button>
-            <button
-              id="tab-staff-tasks"
-              onClick={() => setActiveTab('tasks')}
-              className={`flex-1 min-w-[100px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'tasks'
-                  ? 'bg-indigo-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <ClipboardList className="w-3.5 h-3.5" />
-              Tasks &amp; Issues
-            </button>
-            <button
-              id="tab-staff-leave"
-              onClick={() => setActiveTab('leave')}
-              className={`flex-1 min-w-[100px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'leave'
-                  ? 'bg-emerald-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Palmtree className="w-3.5 h-3.5" />
-              Leave Requests
-            </button>
-            <button
-              id="tab-staff-weekoff"
-              onClick={() => setActiveTab('week_off')}
-              className={`flex-1 min-w-[110px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'week_off'
-                  ? 'bg-sky-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Palmtree className="w-3.5 h-3.5" />
-              Week-Off Requests
-            </button>
-            <button
-              id="tab-staff-payslips"
-              onClick={() => setActiveTab('payroll')}
-              className={`flex-1 min-w-[100px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                activeTab === 'payroll'
-                  ? 'bg-emerald-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Receipt className="w-3.5 h-3.5" />
-              My Payslips
-            </button>
-          </div>
-        )}
 
         {/* Dashboard Alert Banners */}
         {/* 1. Staff / InvMgr Alert: Yesterday's attendance unmarked */}
@@ -577,7 +344,9 @@ export default function PlaceholderDashboard() {
         )}
 
         {/* Main Content Area */}
-        {activeTab === 'tasks' ? (
+        {activeTab === 'overview' && (isOwner || isManager) ? (
+          <ReportsDashboard onNavigate={setActiveTab} />
+        ) : activeTab === 'tasks' ? (
           <UnifiedTaskManagement />
         ) : activeTab === 'leave' ? (
           <UnifiedLeaveManagement />
@@ -606,6 +375,8 @@ export default function PlaceholderDashboard() {
           <ManagerGeolocationSetup />
         ) : (isOwner || isManager) && activeTab === 'staff' ? (
           <StaffManagement />
+        ) : activeTab === 'overview' && isStaffOrInvMgr ? (
+          <StaffClockInOut />
         ) : (
           <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 sm:p-8 shadow-2xl space-y-6">
             {/* Main required display message */}
@@ -845,6 +616,15 @@ export default function PlaceholderDashboard() {
           />
         )}
       </div>
+
+      {/* Bottom Sticky Menu for Navigation */}
+      <BottomStickyMenu
+        role={currentUser.role as any}
+        activeTab={activeTab}
+        onSelectTab={setActiveTab}
+        pendingApprovalsCount={totalPendingApprovals}
+        pendingAttendanceCount={isManager ? managerUnmarkedYesterdayCount + managerPendingCorrectionsCount : undefined}
+      />
     </div>
   );
 }
