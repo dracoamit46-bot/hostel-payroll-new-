@@ -554,7 +554,7 @@ export default function UnifiedLeaveManagement() {
       <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
         {/* Navigation Tabs for Manager / Owner */}
         {(isManager || isOwner) && (
-          <div className="flex items-center border-b border-slate-800 overflow-x-auto bg-slate-950/50 p-2 gap-1.5">
+          <div className="flex flex-wrap items-center border-b border-slate-800 bg-slate-950/50 p-2 gap-2">
             <button
               id="tab-leave-pending"
               onClick={() => setStatusTab('pending')}
