@@ -1,1 +1,5 @@
 @import "tailwindcss";
+
+iframe#nl-badge-frame {
+    z-index: 0 !important;
+}
