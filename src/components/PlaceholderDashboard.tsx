@@ -24,6 +24,8 @@ import {
   FileEdit,
   Bell,
   ArrowRight,
+  Calculator,
+  Receipt,
 } from 'lucide-react';
 import OwnerPropertyManagement from './OwnerPropertyManagement';
 import ManagerGeolocationSetup from './ManagerGeolocationSetup';
@@ -35,12 +37,14 @@ import ManagerWeekOffApproval from './ManagerWeekOffApproval';
 import UnifiedTaskManagement from './UnifiedTaskManagement';
 import UnifiedLeaveManagement from './UnifiedLeaveManagement';
 import AttendanceCorrectionModal from './AttendanceCorrectionModal';
+import PayrollManagement from './PayrollManagement';
+import StaffPayslips from './StaffPayslips';
 
 export default function PlaceholderDashboard() {
   const { currentUser, logout } = useAuth();
   const [property, setProperty] = useState<Property | null>(null);
   const [loadingProperty, setLoadingProperty] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'properties' | 'geolocation' | 'staff' | 'attendance' | 'weekoff_approval' | 'clock_in_out' | 'week_off' | 'tasks' | 'leave'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'properties' | 'geolocation' | 'staff' | 'attendance' | 'weekoff_approval' | 'clock_in_out' | 'week_off' | 'tasks' | 'leave' | 'payroll'>('overview');
 
   // Yesterday date helper
   const getYesterdayIso = () => {
@@ -230,6 +234,18 @@ export default function PlaceholderDashboard() {
               Leave Management
             </button>
             <button
+              id="tab-owner-payroll"
+              onClick={() => setActiveTab('payroll')}
+              className={`flex-1 min-w-[90px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                activeTab === 'payroll'
+                  ? 'bg-emerald-600 text-white shadow'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Calculator className="w-3.5 h-3.5" />
+              Payroll
+            </button>
+            <button
               id="tab-owner-attendance"
               onClick={() => setActiveTab('attendance')}
               className={`flex-1 min-w-[90px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
@@ -308,9 +324,21 @@ export default function PlaceholderDashboard() {
               Leave Approvals
             </button>
             <button
+              id="tab-mgr-payroll"
+              onClick={() => setActiveTab('payroll')}
+              className={`flex-1 min-w-[90px] py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                activeTab === 'payroll'
+                  ? 'bg-emerald-600 text-white shadow'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Calculator className="w-3.5 h-3.5" />
+              Payroll
+            </button>
+            <button
               id="tab-mgr-attendance"
               onClick={() => setActiveTab('attendance')}
-              className={`flex-1 min-w-[120px] py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+              className={`flex-1 min-w-[110px] py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
                 activeTab === 'attendance'
                   ? 'bg-blue-600 text-white shadow'
                   : 'text-slate-400 hover:text-slate-200'
@@ -322,7 +350,7 @@ export default function PlaceholderDashboard() {
             <button
               id="tab-mgr-weekoff"
               onClick={() => setActiveTab('weekoff_approval')}
-              className={`flex-1 min-w-[120px] py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+              className={`flex-1 min-w-[110px] py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
                 activeTab === 'weekoff_approval'
                   ? 'bg-blue-600 text-white shadow'
                   : 'text-slate-400 hover:text-slate-200'
@@ -334,7 +362,7 @@ export default function PlaceholderDashboard() {
             <button
               id="tab-mgr-geolocation"
               onClick={() => setActiveTab('geolocation')}
-              className={`flex-1 min-w-[100px] py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+              className={`flex-1 min-w-[95px] py-2 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
                 activeTab === 'geolocation'
                   ? 'bg-blue-600 text-white shadow'
                   : 'text-slate-400 hover:text-slate-200'
@@ -408,6 +436,18 @@ export default function PlaceholderDashboard() {
             >
               <Palmtree className="w-3.5 h-3.5" />
               Week-Off Requests
+            </button>
+            <button
+              id="tab-staff-payslips"
+              onClick={() => setActiveTab('payroll')}
+              className={`flex-1 min-w-[100px] py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                activeTab === 'payroll'
+                  ? 'bg-emerald-600 text-white shadow'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Receipt className="w-3.5 h-3.5" />
+              My Payslips
             </button>
           </div>
         )}
@@ -541,6 +581,12 @@ export default function PlaceholderDashboard() {
           <UnifiedTaskManagement />
         ) : activeTab === 'leave' ? (
           <UnifiedLeaveManagement />
+        ) : activeTab === 'payroll' ? (
+          isStaffOrInvMgr ? (
+            <StaffPayslips />
+          ) : (
+            <PayrollManagement />
+          )
         ) : isStaffOrInvMgr ? (
           activeTab === 'week_off' ? (
             <StaffWeekOffRequest />
@@ -618,6 +664,16 @@ export default function PlaceholderDashboard() {
             {/* Quick role-specific action alerts */}
             {isOwner && (
               <div className="space-y-3">
+                <div className="p-4 rounded-xl bg-emerald-950/40 border border-emerald-800/40 flex items-center justify-between text-xs text-emerald-200">
+                  <span>Calculate monthly payroll, disburse salary advances, and review attendance-based deductions.</span>
+                  <button
+                    onClick={() => setActiveTab('payroll')}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium cursor-pointer shrink-0 ml-3 transition flex items-center gap-1.5"
+                  >
+                    <Calculator className="w-3.5 h-3.5" />
+                    Payroll Engine →
+                  </button>
+                </div>
                 <div className="p-4 rounded-xl bg-purple-950/40 border border-purple-800/40 flex items-center justify-between text-xs text-purple-200">
                   <span>Review and approve petty cash &amp; head office task vouchers across all properties.</span>
                   <button
@@ -662,6 +718,16 @@ export default function PlaceholderDashboard() {
 
             {isManager && (
               <div className="space-y-3">
+                <div className="p-4 rounded-xl bg-emerald-950/40 border border-emerald-800/40 flex items-center justify-between text-xs text-emerald-200">
+                  <span>Review property monthly payroll, calculate LOP/late deductions, and record payouts.</span>
+                  <button
+                    onClick={() => setActiveTab('payroll')}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium cursor-pointer shrink-0 ml-3 transition flex items-center gap-1.5"
+                  >
+                    <Calculator className="w-3.5 h-3.5" />
+                    Payroll Register →
+                  </button>
+                </div>
                 <div className="p-4 rounded-xl bg-blue-950/40 border border-blue-800/40 flex items-center justify-between text-xs text-blue-200">
                   <span>Review tasks, configure payment vouchers, and approve no-payment requests.</span>
                   <button
@@ -727,6 +793,16 @@ export default function PlaceholderDashboard() {
 
             {isStaffOrInvMgr && (
               <div className="space-y-3">
+                <div className="p-4 rounded-xl bg-emerald-950/40 border border-emerald-800/40 flex items-center justify-between text-xs text-emerald-200">
+                  <span>View your digital monthly payslips and itemized salary compensation.</span>
+                  <button
+                    onClick={() => setActiveTab('payroll')}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium cursor-pointer shrink-0 ml-3 transition flex items-center gap-1.5"
+                  >
+                    <Receipt className="w-3.5 h-3.5" />
+                    My Payslips →
+                  </button>
+                </div>
                 <div className="p-4 rounded-xl bg-indigo-950/40 border border-indigo-800/40 flex items-center justify-between text-xs text-indigo-200">
                   <span>Report operational maintenance issues and supplies needs with photo attachments.</span>
                   <button

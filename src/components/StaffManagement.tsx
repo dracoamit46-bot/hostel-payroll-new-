@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { Property, User, UserRole } from '../types';
+import { Property, User, UserRole, SalaryHistoryRecord } from '../types';
 import { useAuth } from '../context/AuthContext';
 import {
   getProperties,
@@ -7,6 +7,8 @@ import {
   getUsersByProperty,
   createUser,
   deleteUser,
+  getSalaryHistory,
+  addSalaryChange,
 } from '../services/dataService';
 import { authService } from '../services/authService';
 import {
@@ -26,10 +28,11 @@ import {
   KeyRound,
   Copy,
   Check,
-  Eye,
-  EyeOff,
   X,
   AlertTriangle,
+  IndianRupee,
+  History,
+  TrendingUp,
 } from 'lucide-react';
 import OffboardModal from './OffboardModal';
 
@@ -56,6 +59,7 @@ export default function StaffManagement() {
   const [staffType, setStaffType] = useState<string>('');
   const [shiftStart, setShiftStart] = useState<string>('08:00');
   const [shiftEnd, setShiftEnd] = useState<string>('16:00');
+  const [monthlySalary, setMonthlySalary] = useState<string>('16000');
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [employeeToDelete, setEmployeeToDelete] = useState<User | null>(null);
@@ -70,9 +74,51 @@ export default function StaffManagement() {
   const [updatingPin, setUpdatingPin] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
 
+  // Salary Revision & History Modal State
+  const [salaryModalUser, setSalaryModalUser] = useState<User | null>(null);
+  const [salaryHistoryList, setSalaryHistoryList] = useState<SalaryHistoryRecord[]>([]);
+  const [loadingSalaryHistory, setLoadingSalaryHistory] = useState<boolean>(false);
+  const [newMonthlySalaryInput, setNewMonthlySalaryInput] = useState<string>('');
+  const [effectiveFromInput, setEffectiveFromInput] = useState<string>(
+    new Date().toISOString().split('T')[0]
+  );
+  const [salaryRevisionNotes, setSalaryRevisionNotes] = useState<string>('');
+  const [savingSalaryRevision, setSavingSalaryRevision] = useState<boolean>(false);
+  const [salarySuccessMsg, setSalarySuccessMsg] = useState<string | null>(null);
+  const [salaryErrorMsg, setSalaryErrorMsg] = useState<string | null>(null);
+
   // Notifications
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  // Auto-adjust default salary based on role & staff department
+  useEffect(() => {
+    if (selectedRole === 'manager') {
+      setMonthlySalary('35000');
+    } else if (selectedRole === 'inventory_manager') {
+      setMonthlySalary('25000');
+    } else {
+      switch (staffType.toLowerCase()) {
+        case 'kitchen':
+          setMonthlySalary('18000');
+          break;
+        case 'maintenance':
+          setMonthlySalary('17000');
+          break;
+        case 'front desk':
+          setMonthlySalary('20000');
+          break;
+        case 'housekeeping':
+          setMonthlySalary('15000');
+          break;
+        case 'security':
+          setMonthlySalary('16000');
+          break;
+        default:
+          setMonthlySalary((prev) => (prev ? prev : '16000'));
+      }
+    }
+  }, [selectedRole, staffType]);
 
   // 1. Initial load for properties
   useEffect(() => {
@@ -121,12 +167,10 @@ export default function StaffManagement() {
       const allPropUsers = await getUsersByProperty(propId);
       
       if (isOwner) {
-        // Owner sees ALL employees for this property (staff, manager, inventory_manager)
         setEmployeeList(allPropUsers);
         const prop = await getPropertyById(propId);
         setCurrentProperty(prop);
       } else {
-        // Manager sees staff & inventory managers for this property (excluding self/owner)
         const managedStaff = allPropUsers.filter(
           (u) => u.id !== currentUser?.id && u.role !== 'owner'
         );
@@ -169,7 +213,7 @@ export default function StaffManagement() {
     return match ? match.name : 'Unknown Property';
   }, [currentProperty, properties, selectedPropertyId]);
 
-  // Handle Add Employee (Staff/Manager/Inventory Manager for Owner; Staff only for Manager)
+  // Handle Add Employee
   const handleAddEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
@@ -179,6 +223,7 @@ export default function StaffManagement() {
     const trimmedPhone = phone.trim();
     const trimmedType = staffType.trim();
     const roleToCreate: UserRole = isOwner ? selectedRole : 'staff';
+    const parsedSalary = parseFloat(monthlySalary);
 
     if (!selectedPropertyId) {
       setErrorMessage('Please select a valid property before adding an employee.');
@@ -187,6 +232,11 @@ export default function StaffManagement() {
 
     if (!trimmedName || !trimmedPhone) {
       setErrorMessage('Please fill in both Name and Phone Number.');
+      return;
+    }
+
+    if (isNaN(parsedSalary) || parsedSalary <= 0) {
+      setErrorMessage('Please specify a valid positive Fixed Monthly Salary (₹).');
       return;
     }
 
@@ -215,10 +265,12 @@ export default function StaffManagement() {
         name: trimmedName,
         phone: trimmedPhone,
         role: roleToCreate,
-        propertyId: selectedPropertyId, // Scoped to selected property
+        propertyId: selectedPropertyId,
         staffType: roleToCreate === 'staff' ? trimmedType : null,
         shiftStart: roleToCreate === 'staff' ? shiftStart : null,
         shiftEnd: roleToCreate === 'staff' ? shiftEnd : null,
+        monthlySalary: parsedSalary,
+        joiningDate: new Date().toISOString().split('T')[0],
       });
 
       // Provision PIN with Supabase Auth
@@ -239,6 +291,7 @@ export default function StaffManagement() {
       setStaffType('');
       setShiftStart('08:00');
       setShiftEnd('16:00');
+      setMonthlySalary('16000');
       if (isOwner) {
         setSelectedRole('staff');
       }
@@ -251,7 +304,7 @@ export default function StaffManagement() {
           : 'Staff Member';
 
       setSuccessMessage(
-        `${roleLabel} "${newEmployee.name}" added successfully to ${activePropertyName}! Login PIN: ${cleanPin}`
+        `${roleLabel} "${newEmployee.name}" added successfully to ${activePropertyName}! Monthly Salary: ₹${parsedSalary.toLocaleString('en-IN')}`
       );
       await loadEmployees(selectedPropertyId);
       setTimeout(() => setSuccessMessage(null), 6000);
@@ -279,6 +332,67 @@ export default function StaffManagement() {
     }
   };
 
+  // Open Salary History & Revision Modal
+  const handleOpenSalaryModal = async (user: User) => {
+    setSalaryModalUser(user);
+    setNewMonthlySalaryInput(user.monthlySalary ? String(user.monthlySalary) : '16000');
+    setEffectiveFromInput(new Date().toISOString().split('T')[0]);
+    setSalaryRevisionNotes('');
+    setSalarySuccessMsg(null);
+    setSalaryErrorMsg(null);
+    try {
+      setLoadingSalaryHistory(true);
+      const history = await getSalaryHistory(user.id);
+      setSalaryHistoryList(history);
+    } catch (err) {
+      console.error('Failed to load salary history', err);
+    } finally {
+      setLoadingSalaryHistory(false);
+    }
+  };
+
+  // Submit Salary Change
+  const handleSaveSalaryChange = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!salaryModalUser) return;
+    setSalarySuccessMsg(null);
+    setSalaryErrorMsg(null);
+
+    const parsedSalary = parseFloat(newMonthlySalaryInput);
+    if (isNaN(parsedSalary) || parsedSalary <= 0) {
+      setSalaryErrorMsg('Please enter a valid monthly salary greater than 0.');
+      return;
+    }
+    if (!effectiveFromInput) {
+      setSalaryErrorMsg('Please select an effective start date.');
+      return;
+    }
+
+    try {
+      setSavingSalaryRevision(true);
+      await addSalaryChange(
+        salaryModalUser.id,
+        parsedSalary,
+        effectiveFromInput,
+        salaryRevisionNotes,
+        currentUser?.id
+      );
+
+      setSalarySuccessMsg(`Salary successfully updated to ₹${parsedSalary.toLocaleString('en-IN')} / month.`);
+      // Reload history & employee list
+      const updatedHistory = await getSalaryHistory(salaryModalUser.id);
+      setSalaryHistoryList(updatedHistory);
+      if (selectedPropertyId) {
+        await loadEmployees(selectedPropertyId);
+      }
+      setTimeout(() => setSalarySuccessMsg(null), 4000);
+    } catch (err: any) {
+      setSalaryErrorMsg(err.message || 'Failed to save salary revision.');
+    } finally {
+      setSavingSalaryRevision(false);
+    }
+  };
+
   // Initiate Delete Employee (Opens in-app confirmation modal)
   const handleDeleteEmployee = (userToDelete: User) => {
     setErrorMessage(null);
@@ -286,12 +400,11 @@ export default function StaffManagement() {
     setEmployeeToDelete(userToDelete);
   };
 
-  // Confirm Delete Employee (Executes delete in database and updates list)
+  // Confirm Delete Employee
   const handleConfirmDelete = async (userToDelete: User) => {
     setErrorMessage(null);
     setSuccessMessage(null);
 
-    // Optimistic UI removal
     const previousList = [...employeeList];
     setEmployeeList((prev) => prev.filter((emp) => emp.id !== userToDelete.id));
 
@@ -323,12 +436,11 @@ export default function StaffManagement() {
     }
   };
 
-  // Handle Offboard Employee (Removes via deleteUser after calculation confirmation)
+  // Handle Offboard Employee
   const handleConfirmOffboard = async (userToOffboard: User) => {
     setErrorMessage(null);
     setSuccessMessage(null);
 
-    // Optimistic UI removal
     const previousList = [...employeeList];
     setEmployeeList((prev) => prev.filter((emp) => emp.id !== userToOffboard.id));
 
@@ -402,12 +514,12 @@ export default function StaffManagement() {
         <div>
           <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
             <Users className="w-5 h-5 text-indigo-400" />
-            {isOwner ? 'Employee Management' : 'Staff Management'}
+            {isOwner ? 'Employee Management & Salaries' : 'Staff Management'}
           </h2>
           <p className="text-sm text-slate-400 mt-1">
             {isOwner
-              ? 'Manage all property staff, leadership roles (Managers & Inventory Managers), and operational schedules.'
-              : 'Manage operational on-ground staff members and their shift schedules.'}
+              ? 'Manage property staff, compensation rates (Fixed Monthly Salary), login credentials, and shift rosters.'
+              : 'Manage on-ground staff members, compensation, and their shift schedules.'}
           </p>
         </div>
 
@@ -457,7 +569,7 @@ export default function StaffManagement() {
         <div className="flex items-center gap-2 mb-4 text-slate-200">
           <UserPlus className="w-4 h-4 text-indigo-400" />
           <h3 className="font-semibold text-base">
-            {isOwner ? 'Add New Employee' : 'Add New Staff Member'}
+            {isOwner ? 'Add New Employee & Set Compensation' : 'Add New Staff Member'}
           </h3>
           <span className="text-xs text-slate-400 font-normal">
             (Assigning to: {activePropertyName})
@@ -513,6 +625,27 @@ export default function StaffManagement() {
                 placeholder="e.g. +91 98765 43210"
                 className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-slate-100 text-sm placeholder:text-slate-600 outline-none transition"
               />
+            </div>
+
+            {/* Monthly Salary */}
+            <div>
+              <label htmlFor="staff-salary-input" className="block text-xs font-medium text-slate-300 mb-1.5 flex items-center justify-between">
+                <span>Monthly Base Salary (₹) <span className="text-indigo-400">*</span></span>
+                <span className="text-[10px] text-emerald-400 font-semibold">Fixed Rate</span>
+              </label>
+              <div className="relative">
+                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 text-xs">₹</span>
+                <input
+                  id="staff-salary-input"
+                  type="number"
+                  min="1000"
+                  step="500"
+                  value={monthlySalary}
+                  onChange={(e) => setMonthlySalary(e.target.value)}
+                  placeholder="e.g. 18000"
+                  className="w-full pl-8 pr-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 text-emerald-300 font-mono font-bold text-sm outline-none transition"
+                />
+              </div>
             </div>
 
             {/* Login PIN */}
@@ -658,6 +791,7 @@ export default function StaffManagement() {
               const isEmpManager = emp.role === 'manager';
               const isEmpInvManager = emp.role === 'inventory_manager';
               const isEmpStaff = emp.role === 'staff';
+              const displaySalary = emp.monthlySalary || (isEmpManager ? 35000 : isEmpInvManager ? 25000 : 16000);
 
               return (
                 <div
@@ -697,6 +831,12 @@ export default function StaffManagement() {
                           Staff
                         </span>
                       )}
+
+                      {/* Monthly Salary Badge */}
+                      <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-950/70 border border-emerald-800/60 text-emerald-300 font-mono font-semibold flex items-center gap-1">
+                        <IndianRupee className="w-3 h-3 text-emerald-400" />
+                        ₹{displaySalary.toLocaleString('en-IN')} / month
+                      </span>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-slate-400">
@@ -720,8 +860,19 @@ export default function StaffManagement() {
                     </div>
                   </div>
 
-                  {/* Actions: Credentials/PIN + Offboard (for Staff & Inv Manager) + Delete */}
+                  {/* Actions: Salary Revisions + Credentials/PIN + Offboard + Delete */}
                   <div className="self-end sm:self-center flex flex-wrap items-center gap-2">
+                    <button
+                      id={`salary-history-${emp.id}`}
+                      type="button"
+                      onClick={() => handleOpenSalaryModal(emp)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-950/60 hover:bg-emerald-900/80 border border-emerald-800/60 hover:border-emerald-700 text-emerald-300 hover:text-emerald-200 text-xs font-semibold transition cursor-pointer"
+                      title="View & revise monthly salary history"
+                    >
+                      <TrendingUp className="w-3.5 h-3.5" />
+                      Salary Rate
+                    </button>
+
                     <button
                       id={`credentials-staff-${emp.id}`}
                       type="button"
@@ -777,6 +928,177 @@ export default function StaffManagement() {
         onConfirmOffboard={handleConfirmOffboard}
         isProcessing={isOffboarding}
       />
+
+      {/* Salary History & Revision Modal */}
+      {salaryModalUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-xs">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-2xl animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] overflow-y-auto">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 rounded-xl bg-emerald-950 border border-emerald-800/60 text-emerald-400">
+                  <TrendingUp className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-base">Monthly Salary &amp; Rate Revisions</h3>
+                  <p className="text-xs text-slate-400">{salaryModalUser.name} ({salaryModalUser.role})</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSalaryModalUser(null)}
+                className="text-slate-400 hover:text-slate-200 p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Current Salary Overview Card */}
+            <div className="rounded-xl bg-emerald-950/30 border border-emerald-800/40 p-4 flex items-center justify-between">
+              <div>
+                <p className="text-xs text-emerald-400 font-medium">Active Monthly Salary</p>
+                <p className="text-2xl font-black font-mono text-emerald-300 mt-0.5">
+                  ₹{(salaryModalUser.monthlySalary || 16000).toLocaleString('en-IN')}
+                  <span className="text-xs font-normal text-slate-400"> / month</span>
+                </p>
+              </div>
+              <div className="text-right text-xs text-slate-400">
+                <p>Model: Fixed Monthly</p>
+                <p className="text-slate-500 text-[11px] mt-0.5">Divisor: Dynamic Calendar Days</p>
+              </div>
+            </div>
+
+            {/* Add Salary Revision Form */}
+            <form onSubmit={handleSaveSalaryChange} className="space-y-3 bg-slate-950/70 border border-slate-800/80 rounded-xl p-4">
+              <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
+                Schedule / Apply Rate Revision
+              </h4>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-slate-300 font-medium mb-1">
+                    New Monthly Base (₹) *
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs">₹</span>
+                    <input
+                      type="number"
+                      step="500"
+                      min="1000"
+                      required
+                      value={newMonthlySalaryInput}
+                      onChange={(e) => setNewMonthlySalaryInput(e.target.value)}
+                      className="w-full pl-7 pr-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-emerald-300 font-mono font-bold text-sm focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs text-slate-300 font-medium mb-1">
+                    Effective Date *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={effectiveFromInput}
+                    onChange={(e) => setEffectiveFromInput(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-sm font-mono focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs text-slate-300 font-medium mb-1">
+                  Revision Reason / Audit Notes
+                </label>
+                <input
+                  type="text"
+                  value={salaryRevisionNotes}
+                  onChange={(e) => setSalaryRevisionNotes(e.target.value)}
+                  placeholder="e.g. Annual increment, promotion, role change"
+                  className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs placeholder:text-slate-600 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              {salarySuccessMsg && (
+                <div className="p-2.5 rounded-lg bg-emerald-950/80 border border-emerald-800 text-emerald-300 text-xs flex items-center gap-2">
+                  <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{salarySuccessMsg}</span>
+                </div>
+              )}
+
+              {salaryErrorMsg && (
+                <div className="p-2.5 rounded-lg bg-rose-950/80 border border-rose-800 text-rose-300 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>{salaryErrorMsg}</span>
+                </div>
+              )}
+
+              <div className="flex justify-end pt-1">
+                <button
+                  type="submit"
+                  disabled={savingSalaryRevision}
+                  className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold transition shadow cursor-pointer flex items-center gap-1.5"
+                >
+                  {savingSalaryRevision ? 'Applying Revision...' : 'Apply Salary Revision'}
+                </button>
+              </div>
+            </form>
+
+            {/* Historical Salary Revisions List */}
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                <History className="w-3.5 h-3.5 text-slate-400" />
+                Historical Salary Timeline
+              </h4>
+
+              {loadingSalaryHistory ? (
+                <div className="py-6 text-center text-xs text-slate-500">
+                  Loading salary history...
+                </div>
+              ) : salaryHistoryList.length === 0 ? (
+                <div className="p-4 rounded-xl bg-slate-950/50 border border-slate-800 text-center text-xs text-slate-500">
+                  No previous salary revision records logged.
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                  {salaryHistoryList.map((item) => (
+                    <div
+                      key={item.id}
+                      className={`p-3 rounded-xl border text-xs flex items-center justify-between ${
+                        item.isActive
+                          ? 'bg-emerald-950/30 border-emerald-800/50 text-emerald-200'
+                          : 'bg-slate-950/40 border-slate-800/60 text-slate-400'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold text-sm text-slate-100">
+                            ₹{item.monthlySalary.toLocaleString('en-IN')}
+                          </span>
+                          {item.isActive && (
+                            <span className="px-2 py-0.5 rounded-full bg-emerald-900/60 border border-emerald-700/60 text-emerald-300 text-[10px] font-semibold">
+                              Active
+                            </span>
+                          )}
+                        </div>
+                        {item.notes && (
+                          <p className="text-[11px] text-slate-400 mt-0.5">{item.notes}</p>
+                        )}
+                      </div>
+                      <div className="text-right text-[11px] text-slate-400 font-mono">
+                        <span>From: {item.effectiveFrom}</span>
+                        {item.effectiveTo && <div>To: {item.effectiveTo}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Credentials & PIN Modal */}
       {credentialsUser && (
@@ -989,4 +1311,3 @@ export default function StaffManagement() {
     </div>
   );
 }
-

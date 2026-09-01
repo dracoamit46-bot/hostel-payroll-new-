@@ -45,6 +45,111 @@ export interface User {
   staffType: string | null;
   shiftStart: string | null;
   shiftEnd: string | null;
+  monthlySalary?: number | null;
+  joiningDate?: string | null;
+  isActive?: boolean;
+}
+
+export interface SalaryHistoryRecord {
+  id: string;
+  userId: string;
+  monthlySalary: number;
+  effectiveFrom: string; // YYYY-MM-DD
+  effectiveTo: string | null; // YYYY-MM-DD or null if active
+  isActive: boolean;
+  notes?: string | null;
+  createdBy?: string | null;
+  createdAt?: string;
+}
+
+export type PayrollStatus = 'draft' | 'calculated' | 'approved' | 'locked' | 'paid';
+export type PayrollPaymentStatus = 'unpaid' | 'partially_paid' | 'paid';
+export type PayrollPaymentMode = 'upi' | 'cash' | 'bank_transfer' | 'cheque';
+
+export interface PayrollAdjustment {
+  id: string;
+  payrollRecordId: string;
+  type: 'addition' | 'deduction';
+  amount: number;
+  reason: string;
+  createdBy?: string | null;
+  createdAt?: string;
+}
+
+export interface PayrollRecord {
+  id: string;
+  userId: string;
+  propertyId: string;
+  payrollMonth: string; // e.g. '2026-08'
+  
+  // Snapshot Data
+  employeeName?: string;
+  employeeRole?: string;
+  employeeStaffType?: string;
+  monthlySalary: number;
+  calendarDays: number;
+  dailyRate: number;
+
+  // Attendance & Leave Metrics Snapshot
+  presentDays: number;
+  halfDays: number;
+  weekOffs: number;
+  carryForwardWeekOffs: number;
+  paidLeaves: number;
+  absentDays: number;
+  lopLeaves: number;
+  excessWeekOffs: number;
+
+  // Day Totals
+  payableDays: number;
+  totalLopDays: number;
+
+  // Financial Snapshots
+  lopDeduction: number;
+  latePenaltyDeduction: number;
+  advanceRecovery: number;
+  otherAdditions: number;
+  otherDeductions: number;
+  grossSalary: number;
+  netSalary: number;
+  excessUnrecoveredDeduction: number;
+
+  // Lifecycle
+  status: PayrollStatus;
+
+  // Payment Tracking
+  paymentStatus: PayrollPaymentStatus;
+  paymentDate?: string | null;
+  paymentMode?: PayrollPaymentMode | null;
+  transactionRef?: string | null;
+  paymentNotes?: string | null;
+  paidAmount?: number;
+
+  // Audit Trail
+  generatedBy?: string | null;
+  generatedAt?: string;
+  approvedBy?: string | null;
+  approvedAt?: string | null;
+  lockedBy?: string | null;
+  lockedAt?: string | null;
+  paidBy?: string | null;
+  paidAt?: string | null;
+
+  // Line item adjustments
+  adjustments?: PayrollAdjustment[];
+}
+
+export interface SalaryAdvance {
+  id: string;
+  userId: string;
+  amount: number;
+  date: string;
+  reason: string;
+  recoveredAmount: number;
+  outstandingAmount: number;
+  status: 'active' | 'fully_recovered' | 'cancelled';
+  createdBy?: string | null;
+  createdAt?: string;
 }
 
 export interface AttendanceRecord {
