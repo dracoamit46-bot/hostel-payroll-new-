@@ -676,8 +676,17 @@ export const dataService = {
         .single();
 
       if (error) {
-        // Fallback: If monthly_salary column doesn't exist yet on users table, retry with standard columns
-        if (error.message?.includes('monthly_salary') || error.code === '42703') {
+        // Fallback: If is_active, monthly_salary, or joining_date columns don't exist yet on users table, retry with standard core columns
+        const isColumnMissing =
+          error.code === '42703' ||
+          error.code === 'PGRST204' ||
+          error.message?.includes('is_active') ||
+          error.message?.includes('monthly_salary') ||
+          error.message?.includes('joining_date') ||
+          error.message?.toLowerCase().includes('schema cache') ||
+          error.message?.toLowerCase().includes('could not find the');
+
+        if (isColumnMissing) {
           const { data: retryData, error: retryErr } = await supabase
             .from('users')
             .insert({
@@ -693,7 +702,7 @@ export const dataService = {
             .select()
             .single();
           if (retryErr) throw retryErr;
-          createdDbUser = { ...retryData, monthly_salary: initialSalary };
+          createdDbUser = { ...retryData, monthly_salary: initialSalary, is_active: user.isActive !== false, joining_date: user.joiningDate };
         } else {
           throw error;
         }
@@ -755,7 +764,16 @@ export const dataService = {
         .select()
         .single();
       if (res.error) {
-        if (res.error.message?.includes('monthly_salary') || res.error.code === '42703') {
+        const isColumnMissing =
+          res.error.code === '42703' ||
+          res.error.code === 'PGRST204' ||
+          res.error.message?.includes('is_active') ||
+          res.error.message?.includes('monthly_salary') ||
+          res.error.message?.includes('joining_date') ||
+          res.error.message?.toLowerCase().includes('schema cache') ||
+          res.error.message?.toLowerCase().includes('could not find the');
+
+        if (isColumnMissing) {
           // Remove new columns if not yet migrated in Supabase
           delete payload.monthly_salary;
           delete payload.joining_date;
@@ -767,7 +785,7 @@ export const dataService = {
             .select()
             .single();
           if (retryRes.error) throw retryRes.error;
-          data = { ...retryRes.data, monthly_salary: updates.monthlySalary };
+          data = { ...retryRes.data, monthly_salary: updates.monthlySalary, is_active: updates.isActive, joining_date: updates.joiningDate };
         } else {
           throw res.error;
         }

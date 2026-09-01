@@ -33,6 +33,7 @@ import {
   IndianRupee,
   History,
   TrendingUp,
+  Calendar,
 } from 'lucide-react';
 import OffboardModal from './OffboardModal';
 
@@ -60,6 +61,9 @@ export default function StaffManagement() {
   const [shiftStart, setShiftStart] = useState<string>('08:00');
   const [shiftEnd, setShiftEnd] = useState<string>('16:00');
   const [monthlySalary, setMonthlySalary] = useState<string>('16000');
+  const [joiningDate, setJoiningDate] = useState<string>(
+    new Date().toISOString().split('T')[0]
+  );
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [employeeToDelete, setEmployeeToDelete] = useState<User | null>(null);
@@ -270,7 +274,7 @@ export default function StaffManagement() {
         shiftStart: roleToCreate === 'staff' ? shiftStart : null,
         shiftEnd: roleToCreate === 'staff' ? shiftEnd : null,
         monthlySalary: parsedSalary,
-        joiningDate: new Date().toISOString().split('T')[0],
+        joiningDate: joiningDate || new Date().toISOString().split('T')[0],
       });
 
       // Provision PIN with Supabase Auth
@@ -292,6 +296,7 @@ export default function StaffManagement() {
       setShiftStart('08:00');
       setShiftEnd('16:00');
       setMonthlySalary('16000');
+      setJoiningDate(new Date().toISOString().split('T')[0]);
       if (isOwner) {
         setSelectedRole('staff');
       }
@@ -648,6 +653,24 @@ export default function StaffManagement() {
               </div>
             </div>
 
+            {/* Joining Date */}
+            <div>
+              <label htmlFor="staff-joining-date" className="block text-xs font-medium text-slate-300 mb-1.5 flex items-center justify-between">
+                <span>Joining Date <span className="text-indigo-400">*</span></span>
+                <span className="text-[10px] text-indigo-400 font-medium">Service Start</span>
+              </label>
+              <div className="relative">
+                <input
+                  id="staff-joining-date"
+                  type="date"
+                  required
+                  value={joiningDate}
+                  onChange={(e) => setJoiningDate(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-slate-100 text-sm font-mono outline-none transition cursor-pointer"
+                />
+              </div>
+            </div>
+
             {/* Login PIN */}
             <div>
               <label htmlFor="staff-pin-input" className="block text-xs font-medium text-slate-300 mb-1.5 flex items-center justify-between">
@@ -850,6 +873,15 @@ export default function StaffManagement() {
                           <Clock className="w-3.5 h-3.5 text-slate-500" />
                           <span className="font-mono text-slate-300">
                             {emp.shiftStart || '--:--'} - {emp.shiftEnd || '--:--'}
+                          </span>
+                        </span>
+                      )}
+
+                      {emp.joiningDate && (
+                        <span className="flex items-center gap-1.5">
+                          <Calendar className="w-3.5 h-3.5 text-indigo-400" />
+                          <span>
+                            Joined: <span className="font-mono text-slate-300 font-medium">{emp.joiningDate}</span>
                           </span>
                         </span>
                       )}
