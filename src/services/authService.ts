@@ -203,6 +203,10 @@ export const authService = {
         staffType: matchedDbUser?.staff_type || null,
         shiftStart: matchedDbUser?.shift_start || null,
         shiftEnd: matchedDbUser?.shift_end || null,
+        shift1Start: matchedDbUser?.shift_1_start || matchedDbUser?.shift_start || null,
+        shift1End: matchedDbUser?.shift_1_end || null,
+        shift2Start: matchedDbUser?.shift_2_start || null,
+        shift2End: matchedDbUser?.shift_2_end || null,
       };
 
       // Ensure public.users table has the matching user record
@@ -315,6 +319,10 @@ export const authService = {
           staffType: match.staff_type,
           shiftStart: match.shift_start,
           shiftEnd: match.shift_end,
+          shift1Start: match.shift_1_start || match.shift_start || null,
+          shift1End: match.shift_1_end || null,
+          shift2Start: match.shift_2_start || null,
+          shift2End: match.shift_2_end || null,
         };
       }
 
@@ -330,6 +338,10 @@ export const authService = {
         staffType: null,
         shiftStart: null,
         shiftEnd: null,
+        shift1Start: null,
+        shift1End: null,
+        shift2Start: null,
+        shift2End: null,
       };
 
       try {

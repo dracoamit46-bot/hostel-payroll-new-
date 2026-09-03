@@ -45,6 +45,10 @@ export interface User {
   staffType: string | null;
   shiftStart: string | null;
   shiftEnd: string | null;
+  shift1Start?: string | null;
+  shift1End?: string | null;
+  shift2Start?: string | null;
+  shift2End?: string | null;
   monthlySalary?: number | null;
   joiningDate?: string | null;
   isActive?: boolean;
@@ -161,17 +165,77 @@ export interface AttendanceRecord {
   status: AttendanceStatus;
   shiftStatus: ShiftPunchStatus;
 
-  // Punch Timestamps & Media
+  // Punch Timestamps & Media (General / Combined)
   clockInTime: string | null;
   clockInSelfieUrl: string | null;
   clockInLat: number | null;
   clockInLng: number | null;
+  clockInAccuracy?: number | null;
+  clockInAddress?: string | null;
   clockOutTime: string | null;
   clockOutSelfieUrl: string | null;
+  clockOutLat?: number | null;
+  clockOutLng?: number | null;
+  clockOutAccuracy?: number | null;
+  clockOutAddress?: string | null;
+
+  // Multi-Shift (Split Shifts) - Shift 1 Full Telemetry
+  shift1ClockInTime?: string | null;
+  shift1ClockInSelfieUrl?: string | null;
+  shift1ClockInLat?: number | null;
+  shift1ClockInLng?: number | null;
+  shift1ClockInAccuracy?: number | null;
+  shift1ClockInAddress?: string | null;
+  shift1ClockOutTime?: string | null;
+  shift1ClockOutSelfieUrl?: string | null;
+  shift1ClockOutLat?: number | null;
+  shift1ClockOutLng?: number | null;
+  shift1ClockOutAccuracy?: number | null;
+  shift1ClockOutAddress?: string | null;
+  shift1WorkedMinutes?: number;
+  shift1LateMinutes?: number;
+  shift1Status?: 'not_started' | 'in_progress' | 'completed' | 'missed';
+
+  // Aliases for compatibility
+  shift1InTime?: string | null;
+  shift1InSelfieUrl?: string | null;
+  shift1InLat?: number | null;
+  shift1InLng?: number | null;
+  shift1OutTime?: string | null;
+  shift1OutSelfieUrl?: string | null;
+
+  // Multi-Shift (Split Shifts) - Shift 2 Full Telemetry
+  shift2ClockInTime?: string | null;
+  shift2ClockInSelfieUrl?: string | null;
+  shift2ClockInLat?: number | null;
+  shift2ClockInLng?: number | null;
+  shift2ClockInAccuracy?: number | null;
+  shift2ClockInAddress?: string | null;
+  shift2ClockOutTime?: string | null;
+  shift2ClockOutSelfieUrl?: string | null;
+  shift2ClockOutLat?: number | null;
+  shift2ClockOutLng?: number | null;
+  shift2ClockOutAccuracy?: number | null;
+  shift2ClockOutAddress?: string | null;
+  shift2WorkedMinutes?: number;
+  shift2LateMinutes?: number;
+  shift2Status?: 'not_started' | 'in_progress' | 'completed' | 'missed';
+
+  // Aliases for compatibility
+  shift2InTime?: string | null;
+  shift2InSelfieUrl?: string | null;
+  shift2InLat?: number | null;
+  shift2InLng?: number | null;
+  shift2OutTime?: string | null;
+  shift2OutSelfieUrl?: string | null;
   
   // Worked duration & Schedule
   scheduledShiftStart?: string | null;
   scheduledShiftEnd?: string | null;
+  shift1Start?: string | null;
+  shift1End?: string | null;
+  shift2Start?: string | null;
+  shift2End?: string | null;
   workedMinutes?: number;
   totalHours?: number;
 
@@ -214,6 +278,7 @@ export interface AttendanceCorrectionRequest {
   id: string;
   userId: string;
   date: string;
+  punchMissed?: string | null;
   note: string | null;
   status: RequestStatus;
   reviewedBy: string | null;

@@ -2,6 +2,7 @@ import React from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import DevLogin from './components/DevLogin';
 import PlaceholderDashboard from './components/PlaceholderDashboard';
+import { OfflineIndicator } from './components/OfflineIndicator';
 
 function MainContent() {
   const { currentUser, loading } = useAuth();
@@ -18,10 +19,20 @@ function MainContent() {
   }
 
   if (!currentUser) {
-    return <DevLogin />;
+    return (
+      <>
+        <DevLogin />
+        <OfflineIndicator />
+      </>
+    );
   }
 
-  return <PlaceholderDashboard />;
+  return (
+    <>
+      <PlaceholderDashboard />
+      <OfflineIndicator />
+    </>
+  );
 }
 
 export default function App() {
@@ -31,3 +42,4 @@ export default function App() {
     </AuthProvider>
   );
 }
+

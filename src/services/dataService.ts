@@ -43,6 +43,10 @@ interface DbUser {
   staff_type: string | null;
   shift_start: string | null;
   shift_end: string | null;
+  shift_1_start?: string | null;
+  shift_1_end?: string | null;
+  shift_2_start?: string | null;
+  shift_2_end?: string | null;
   monthly_salary?: number | null;
   joining_date?: string | null;
   is_active?: boolean | null;
@@ -134,12 +138,22 @@ interface DbAttendance {
   clock_in_selfie_url: string | null;
   clock_in_lat: number | null;
   clock_in_lng: number | null;
+  clock_in_accuracy?: number | null;
+  clock_in_address?: string | null;
   clock_out_time: string | null;
   clock_out_selfie_url: string | null;
+  clock_out_lat?: number | null;
+  clock_out_lng?: number | null;
+  clock_out_accuracy?: number | null;
+  clock_out_address?: string | null;
   status: any;
   shift_status?: any;
   scheduled_shift_start?: string | null;
   scheduled_shift_end?: string | null;
+  shift_1_start?: string | null;
+  shift_1_end?: string | null;
+  shift_2_start?: string | null;
+  shift_2_end?: string | null;
   worked_minutes?: number | null;
   total_hours?: number | null;
   late_minutes?: number | null;
@@ -152,6 +166,40 @@ interface DbAttendance {
   manager_adjusted?: boolean | null;
   adjustment_reason?: string | null;
   marked_by: string | null;
+
+  // Split Shift 1 DB columns
+  shift_1_clock_in_time?: string | null;
+  shift_1_clock_in_selfie_url?: string | null;
+  shift_1_clock_in_lat?: number | null;
+  shift_1_clock_in_lng?: number | null;
+  shift_1_clock_in_accuracy?: number | null;
+  shift_1_clock_in_address?: string | null;
+  shift_1_clock_out_time?: string | null;
+  shift_1_clock_out_selfie_url?: string | null;
+  shift_1_clock_out_lat?: number | null;
+  shift_1_clock_out_lng?: number | null;
+  shift_1_clock_out_accuracy?: number | null;
+  shift_1_clock_out_address?: string | null;
+  shift_1_worked_minutes?: number | null;
+  shift_1_late_minutes?: number | null;
+  shift_1_status?: any;
+
+  // Split Shift 2 DB columns
+  shift_2_clock_in_time?: string | null;
+  shift_2_clock_in_selfie_url?: string | null;
+  shift_2_clock_in_lat?: number | null;
+  shift_2_clock_in_lng?: number | null;
+  shift_2_clock_in_accuracy?: number | null;
+  shift_2_clock_in_address?: string | null;
+  shift_2_clock_out_time?: string | null;
+  shift_2_clock_out_selfie_url?: string | null;
+  shift_2_clock_out_lat?: number | null;
+  shift_2_clock_out_lng?: number | null;
+  shift_2_clock_out_accuracy?: number | null;
+  shift_2_clock_out_address?: string | null;
+  shift_2_worked_minutes?: number | null;
+  shift_2_late_minutes?: number | null;
+  shift_2_status?: any;
 }
 
 interface DbTask {
@@ -204,6 +252,7 @@ interface DbAttendanceCorrectionRequest {
   id: string;
   user_id: string;
   date: string;
+  punch_missed?: string | null;
   note: string | null;
   status: RequestStatus;
   reviewed_by: string | null;
@@ -219,19 +268,34 @@ const mapProperty = (db: DbProperty): Property => ({
   geofenceRadiusM: db.geofence_radius_m,
 });
 
-const mapUser = (db: DbUser): User => ({
-  id: db.id,
-  name: db.name,
-  phone: db.phone,
-  role: db.role,
-  propertyId: db.property_id,
-  staffType: db.staff_type,
-  shiftStart: db.shift_start,
-  shiftEnd: db.shift_end,
-  monthlySalary: db.monthly_salary ? Number(db.monthly_salary) : null,
-  joiningDate: db.joining_date || null,
-  isActive: db.is_active !== false,
-});
+const mapUser = (db: DbUser): User => {
+  const s1Start = db.shift_1_start || db.shift_start || '08:00';
+  const s1End = db.shift_1_end || (db.shift_2_start ? '14:00' : db.shift_end || '16:00');
+  const s2Start = db.shift_2_start !== undefined && db.shift_2_start !== null ? db.shift_2_start : null;
+  const s2End = db.shift_2_end !== undefined && db.shift_2_end !== null ? db.shift_2_end : null;
+
+  const monthlySalary = db.monthly_salary ? Number(db.monthly_salary) : null;
+  const joiningDate = db.joining_date || null;
+  const isActive = db.is_active !== undefined && db.is_active !== null ? db.is_active !== false : true;
+
+  return {
+    id: db.id,
+    name: db.name,
+    phone: db.phone,
+    role: db.role,
+    propertyId: db.property_id,
+    staffType: db.staff_type,
+    shiftStart: s1Start,
+    shiftEnd: s2End || s1End,
+    shift1Start: s1Start,
+    shift1End: s1End,
+    shift2Start: s2Start,
+    shift2End: s2End,
+    monthlySalary,
+    joiningDate,
+    isActive,
+  };
+};
 
 const mapSalaryHistory = (db: DbSalaryHistory): SalaryHistoryRecord => ({
   id: db.id,
@@ -314,8 +378,6 @@ const mapPayrollRecord = (db: DbPayrollRecord, adjustments: PayrollAdjustment[] 
 
 const mapAttendance = (db: DbAttendance): AttendanceRecord => {
   // Normalize status for backward compatibility:
-  // Old values: 'shift_completed' -> status = 'present', shiftStatus = 'completed'
-  //             'late' -> status = 'present', lateMinutes = 20, latePenaltyEligible = true
   let resolvedStatus: AttendanceStatus = 'present';
   let resolvedShiftStatus: ShiftPunchStatus = 'not_started';
 
@@ -349,10 +411,45 @@ const mapAttendance = (db: DbAttendance): AttendanceRecord => {
     }
   }
 
+  const s1In = db.shift_1_clock_in_time || db.clock_in_time;
+  const s1InSelfie = db.shift_1_clock_in_selfie_url || db.clock_in_selfie_url;
+  const s1InLat = db.shift_1_clock_in_lat ?? db.clock_in_lat;
+  const s1InLng = db.shift_1_clock_in_lng ?? db.clock_in_lng;
+  const s1InAcc = db.shift_1_clock_in_accuracy ?? db.clock_in_accuracy;
+  const s1InAddr = db.shift_1_clock_in_address || db.clock_in_address;
+
+  const s1Out = db.shift_1_clock_out_time;
+  const s1OutSelfie = db.shift_1_clock_out_selfie_url;
+  const s1OutLat = db.shift_1_clock_out_lat;
+  const s1OutLng = db.shift_1_clock_out_lng;
+  const s1OutAcc = db.shift_1_clock_out_accuracy;
+  const s1OutAddr = db.shift_1_clock_out_address;
+  const s1Worked = db.shift_1_worked_minutes ?? 0;
+  const s1Late = db.shift_1_late_minutes ?? 0;
+  const s1Status = db.shift_1_status || (s1Out ? 'completed' : s1In ? 'in_progress' : 'not_started');
+
+  const s2In = db.shift_2_clock_in_time;
+  const s2InSelfie = db.shift_2_clock_in_selfie_url;
+  const s2InLat = db.shift_2_clock_in_lat;
+  const s2InLng = db.shift_2_clock_in_lng;
+  const s2InAcc = db.shift_2_clock_in_accuracy;
+  const s2InAddr = db.shift_2_clock_in_address;
+
+  const s2Out = db.shift_2_clock_out_time;
+  const s2OutSelfie = db.shift_2_clock_out_selfie_url;
+  const s2OutLat = db.shift_2_clock_out_lat;
+  const s2OutLng = db.shift_2_clock_out_lng;
+  const s2OutAcc = db.shift_2_clock_out_accuracy;
+  const s2OutAddr = db.shift_2_clock_out_address;
+  const s2Worked = db.shift_2_worked_minutes ?? 0;
+  const s2Late = db.shift_2_late_minutes ?? 0;
+  const s2Status = db.shift_2_status || (s2Out ? 'completed' : s2In ? 'in_progress' : 'not_started');
+
   // Calculate worked minutes & total hours
   let workedMinutes = db.worked_minutes ?? 0;
-  let totalHours = db.total_hours ?? (workedMinutes > 0 ? Number((workedMinutes / 60).toFixed(2)) : undefined);
-  if ((!workedMinutes || workedMinutes === 0) && db.clock_in_time && db.clock_out_time) {
+  if ((s1Worked > 0 || s2Worked > 0) && (!workedMinutes || workedMinutes === 0)) {
+    workedMinutes = s1Worked + s2Worked;
+  } else if ((!workedMinutes || workedMinutes === 0) && db.clock_in_time && db.clock_out_time) {
     try {
       const [inH, inM] = db.clock_in_time.split(':').map(Number);
       const [outH, outM] = db.clock_out_time.split(':').map(Number);
@@ -360,12 +457,12 @@ const mapAttendance = (db: DbAttendance): AttendanceRecord => {
         let diff = outH * 60 + outM - (inH * 60 + inM);
         if (diff < 0) diff += 24 * 60; // overnight shift
         workedMinutes = diff;
-        totalHours = Number((diff / 60).toFixed(2));
       }
     } catch {
       // ignore
     }
   }
+  const totalHours = db.total_hours ?? (workedMinutes > 0 ? Number((workedMinutes / 60).toFixed(2)) : undefined);
 
   // Late calculation & penalty normalization
   const lateMinutes = db.late_minutes ?? (db.status === 'late' ? 20 : 0);
@@ -383,14 +480,75 @@ const mapAttendance = (db: DbAttendance): AttendanceRecord => {
     date: db.date,
     status: resolvedStatus,
     shiftStatus: resolvedShiftStatus,
-    clockInTime: db.clock_in_time,
-    clockInSelfieUrl: db.clock_in_selfie_url,
-    clockInLat: db.clock_in_lat,
-    clockInLng: db.clock_in_lng,
-    clockOutTime: db.clock_out_time,
-    clockOutSelfieUrl: db.clock_out_selfie_url,
+    clockInTime: db.clock_in_time || s1In,
+    clockInSelfieUrl: db.clock_in_selfie_url || s1InSelfie,
+    clockInLat: db.clock_in_lat ?? s1InLat,
+    clockInLng: db.clock_in_lng ?? s1InLng,
+    clockInAccuracy: db.clock_in_accuracy ?? s1InAcc,
+    clockInAddress: db.clock_in_address || s1InAddr,
+    clockOutTime: db.clock_out_time || s2Out || s1Out,
+    clockOutSelfieUrl: db.clock_out_selfie_url || s2OutSelfie || s1OutSelfie,
+    clockOutLat: db.clock_out_lat ?? s2OutLat ?? s1OutLat,
+    clockOutLng: db.clock_out_lng ?? s2OutLng ?? s1OutLng,
+    clockOutAccuracy: db.clock_out_accuracy ?? s2OutAcc ?? s1OutAcc,
+    clockOutAddress: db.clock_out_address || s2OutAddr || s1OutAddr,
+
+    // Shift 1
+    shift1ClockInTime: s1In,
+    shift1ClockInSelfieUrl: s1InSelfie,
+    shift1ClockInLat: s1InLat,
+    shift1ClockInLng: s1InLng,
+    shift1ClockInAccuracy: s1InAcc,
+    shift1ClockInAddress: s1InAddr,
+    shift1ClockOutTime: s1Out,
+    shift1ClockOutSelfieUrl: s1OutSelfie,
+    shift1ClockOutLat: s1OutLat,
+    shift1ClockOutLng: s1OutLng,
+    shift1ClockOutAccuracy: s1OutAcc,
+    shift1ClockOutAddress: s1OutAddr,
+    shift1WorkedMinutes: s1Worked,
+    shift1LateMinutes: s1Late,
+    shift1Status: s1Status,
+
+    // Compatibility aliases
+    shift1InTime: s1In,
+    shift1InSelfieUrl: s1InSelfie,
+    shift1InLat: s1InLat,
+    shift1InLng: s1InLng,
+    shift1OutTime: s1Out,
+    shift1OutSelfieUrl: s1OutSelfie,
+
+    // Shift 2
+    shift2ClockInTime: s2In,
+    shift2ClockInSelfieUrl: s2InSelfie,
+    shift2ClockInLat: s2InLat,
+    shift2ClockInLng: s2InLng,
+    shift2ClockInAccuracy: s2InAcc,
+    shift2ClockInAddress: s2InAddr,
+    shift2ClockOutTime: s2Out,
+    shift2ClockOutSelfieUrl: s2OutSelfie,
+    shift2ClockOutLat: s2OutLat,
+    shift2ClockOutLng: s2OutLng,
+    shift2ClockOutAccuracy: s2OutAcc,
+    shift2ClockOutAddress: s2OutAddr,
+    shift2WorkedMinutes: s2Worked,
+    shift2LateMinutes: s2Late,
+    shift2Status: s2Status,
+
+    // Compatibility aliases
+    shift2InTime: s2In,
+    shift2InSelfieUrl: s2InSelfie,
+    shift2InLat: s2InLat,
+    shift2InLng: s2InLng,
+    shift2OutTime: s2Out,
+    shift2OutSelfieUrl: s2OutSelfie,
+
     scheduledShiftStart: db.scheduled_shift_start,
     scheduledShiftEnd: db.scheduled_shift_end,
+    shift1Start: db.shift_1_start,
+    shift1End: db.shift_1_end,
+    shift2Start: db.shift_2_start,
+    shift2End: db.shift_2_end,
     workedMinutes,
     totalHours,
     lateMinutes,
@@ -458,6 +616,7 @@ const mapAttendanceCorrectionRequest = (
   id: db.id,
   userId: db.user_id,
   date: db.date,
+  punchMissed: db.punch_missed,
   note: db.note,
   status: db.status,
   reviewedBy: db.reviewed_by,
@@ -609,11 +768,254 @@ export const dataService = {
     return data ? mapProperty(data) : null;
   },
 
+  async deleteProperty(propertyId: string): Promise<boolean> {
+    try {
+      // 1. Clean up task dependents for tasks in this property
+      try {
+        const { data: propTasks } = await supabase
+          .from('tasks')
+          .select('id')
+          .eq('property_id', propertyId);
+        if (propTasks && propTasks.length > 0) {
+          const taskIds = propTasks.map((t) => t.id);
+          await supabase.from('task_comments').delete().in('task_id', taskIds);
+          await supabase.from('vouchers').delete().in('task_id', taskIds);
+        }
+      } catch (tErr) {
+        console.warn('Task dependents cleanup notice:', tErr);
+      }
+
+      // 2. Delete tasks and categories for this property
+      try {
+        await supabase.from('tasks').delete().eq('property_id', propertyId);
+      } catch (tErr) {
+        console.warn('Tasks delete notice:', tErr);
+      }
+      try {
+        await supabase.from('task_categories').delete().eq('property_id', propertyId);
+      } catch (catErr) {
+        console.warn('Task categories delete notice:', catErr);
+      }
+
+      // 3. Delete inventory logs & items for this property
+      try {
+        await supabase.from('inventory_logs').delete().eq('property_id', propertyId);
+      } catch (invLogErr) {
+        console.warn('Inventory logs delete notice:', invLogErr);
+      }
+      try {
+        await supabase.from('inventory_items').delete().eq('property_id', propertyId);
+      } catch (invItemErr) {
+        console.warn('Inventory items delete notice:', invItemErr);
+      }
+
+      // 4. Delete property records & activity logs
+      try {
+        await supabase.from('shifts').delete().eq('property_id', propertyId);
+        await supabase.from('staff_performance').delete().eq('property_id', propertyId);
+        await supabase.from('leaves').delete().eq('property_id', propertyId);
+        await supabase.from('payroll_records').delete().eq('property_id', propertyId);
+        await supabase.from('geofence_logs').delete().eq('property_id', propertyId);
+        await supabase.from('property_locations').delete().eq('property_id', propertyId);
+        await supabase.from('notifications').delete().eq('property_id', propertyId);
+      } catch (logErr) {
+        console.warn('Property sub-records delete notice:', logErr);
+      }
+
+      // 5. Unassign users from this property
+      try {
+        await supabase.from('users').update({ property_id: null }).eq('property_id', propertyId);
+      } catch (uErr) {
+        console.warn('User unassign notice:', uErr);
+      }
+
+      // 6. Delete property itself
+      const { error } = await supabase.from('properties').delete().eq('id', propertyId);
+      if (error) {
+        notifySchemaMissing('properties', error);
+        throw new Error(error.message || 'Failed to delete property from database');
+      }
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('property-updated', { detail: { deletedPropertyId: propertyId } }));
+      }
+
+      return true;
+    } catch (err) {
+      console.error('Failed to delete property:', err);
+      throw err;
+    }
+  },
+
+  async clearAllNonOwnerStaff(): Promise<boolean> {
+    try {
+      // 1. Fetch all non-owner users
+      const { data: usersData, error: userFetchErr } = await supabase.from('users').select('id, role, name');
+      if (userFetchErr) {
+        console.error('Error fetching users for staff clearing:', userFetchErr);
+      }
+      const staffToDelete = (usersData || []).filter((u) => u.role !== 'owner');
+      const staffIds = staffToDelete.map((u) => u.id);
+
+      if (staffIds.length === 0) {
+        return true;
+      }
+
+      // 2. Clear FK references pointing to staff in relational tables
+      try { await supabase.from('attendance_records').update({ marked_by: null }).in('marked_by', staffIds); } catch (_) {}
+      try { await supabase.from('leave_requests').update({ reviewed_by: null }).in('reviewed_by', staffIds); } catch (_) {}
+      try { await supabase.from('week_off_requests').update({ reviewed_by: null }).in('reviewed_by', staffIds); } catch (_) {}
+      try { await supabase.from('attendance_correction_requests').update({ reviewed_by: null }).in('reviewed_by', staffIds); } catch (_) {}
+      try { await supabase.from('tasks').update({ last_action_by: null }).in('last_action_by', staffIds); } catch (_) {}
+      try { await supabase.from('tasks').update({ assigned_to: null }).in('assigned_to', staffIds); } catch (_) {}
+      try { await supabase.from('vouchers').update({ approved_by: null }).in('approved_by', staffIds); } catch (_) {}
+      try { await supabase.from('salary_advances').update({ created_by: null }).in('created_by', staffIds); } catch (_) {}
+      try { await supabase.from('salary_history').update({ created_by: null }).in('created_by', staffIds); } catch (_) {}
+      try { await supabase.from('payroll_adjustments').update({ created_by: null }).in('created_by', staffIds); } catch (_) {}
+      try { await supabase.from('payroll_records').update({ generated_by: null, approved_by: null, locked_by: null, paid_by: null }).in('generated_by', staffIds); } catch (_) {}
+      try { await supabase.from('payroll_records').update({ approved_by: null }).in('approved_by', staffIds); } catch (_) {}
+      try { await supabase.from('payroll_records').update({ locked_by: null }).in('locked_by', staffIds); } catch (_) {}
+      try { await supabase.from('payroll_records').update({ paid_by: null }).in('paid_by', staffIds); } catch (_) {}
+
+      // 3. Delete tasks created by staff (plus their comments & vouchers)
+      try {
+        const { data: staffTasks } = await supabase.from('tasks').select('id').in('created_by', staffIds);
+        if (staffTasks && staffTasks.length > 0) {
+          const taskIds = staffTasks.map((t) => t.id);
+          try { await supabase.from('task_comments').delete().in('task_id', taskIds); } catch (_) {}
+          try { await supabase.from('vouchers').delete().in('task_id', taskIds); } catch (_) {}
+          try { await supabase.from('tasks').delete().in('id', taskIds); } catch (_) {}
+        }
+      } catch (_) {}
+
+      // 4. Delete payroll adjustments associated with staff payroll records
+      try {
+        const { data: staffPayrolls } = await supabase.from('payroll_records').select('id').in('user_id', staffIds);
+        if (staffPayrolls && staffPayrolls.length > 0) {
+          const pIds = staffPayrolls.map((p) => p.id);
+          try { await supabase.from('payroll_adjustments').delete().in('payroll_record_id', pIds); } catch (_) {}
+        }
+      } catch (_) {}
+
+      // 5. Delete all user-specific child records & logs
+      try { await supabase.from('payroll_adjustments').delete().in('created_by', staffIds); } catch (_) {}
+      try { await supabase.from('payroll_records').delete().in('user_id', staffIds); } catch (_) {}
+      try { await supabase.from('salary_advances').delete().in('user_id', staffIds); } catch (_) {}
+      try { await supabase.from('salary_history').delete().in('user_id', staffIds); } catch (_) {}
+      try { await supabase.from('task_comments').delete().in('user_id', staffIds); } catch (_) {}
+      try { await supabase.from('vouchers').delete().in('created_by', staffIds); } catch (_) {}
+      try { await supabase.from('attendance_records').delete().in('user_id', staffIds); } catch (_) {}
+      try { await supabase.from('leave_requests').delete().in('user_id', staffIds); } catch (_) {}
+      try { await supabase.from('week_off_requests').delete().in('user_id', staffIds); } catch (_) {}
+      try { await supabase.from('attendance_correction_requests').delete().in('user_id', staffIds); } catch (_) {}
+      try { await supabase.from('shifts').delete().in('user_id', staffIds); } catch (_) {}
+      try { await supabase.from('staff_performance').delete().in('user_id', staffIds); } catch (_) {}
+      try { await supabase.from('leaves').delete().in('user_id', staffIds); } catch (_) {}
+      try { await supabase.from('geofence_logs').delete().in('user_id', staffIds); } catch (_) {}
+      try { await supabase.from('notifications').delete().in('user_id', staffIds); } catch (_) {}
+      try { await supabase.from('inventory_logs').delete().in('created_by', staffIds); } catch (_) {}
+
+      // 6. Delete each staff user individually
+      for (const staffId of staffIds) {
+        try {
+          await supabase.from('users').delete().eq('id', staffId);
+        } catch (delErr) {
+          console.warn(`User ${staffId} individual delete error:`, delErr);
+        }
+      }
+
+      // 7. Bulk delete non-owner rows
+      const { error: bulkErr } = await supabase.from('users').delete().neq('role', 'owner');
+      if (bulkErr) {
+        console.warn('Bulk users delete notice:', bulkErr);
+      }
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('staff-updated', { detail: { cleared: true } }));
+      }
+
+      return true;
+    } catch (err) {
+      console.error('Failed to clear staff members:', err);
+      throw err;
+    }
+  },
+
+  async clearAllPropertiesAndStaff(keepOwner: boolean = true): Promise<boolean> {
+    try {
+      // 1. Clear all non-owner staff & related staff logs first
+      await dataService.clearAllNonOwnerStaff();
+
+      // 2. Clear all operational tables completely
+      const deleteTableSafely = async (tableName: string) => {
+        try {
+          const { data: rows } = await supabase.from(tableName).select('id');
+          if (rows && rows.length > 0) {
+            const ids = rows.map((r: any) => r.id);
+            await supabase.from(tableName).delete().in('id', ids);
+          }
+        } catch (tableErr) {
+          console.warn(`Table cleanup notice for ${tableName}:`, tableErr);
+        }
+      };
+
+      await deleteTableSafely('task_comments');
+      await deleteTableSafely('vouchers');
+      await deleteTableSafely('tasks');
+      await deleteTableSafely('task_categories');
+      await deleteTableSafely('attendance_records');
+      await deleteTableSafely('attendance_correction_requests');
+      await deleteTableSafely('week_off_requests');
+      await deleteTableSafely('leave_requests');
+      await deleteTableSafely('leaves');
+      await deleteTableSafely('shifts');
+      await deleteTableSafely('staff_performance');
+      await deleteTableSafely('salary_history');
+      await deleteTableSafely('payroll_records');
+      await deleteTableSafely('geofence_logs');
+      await deleteTableSafely('inventory_logs');
+      await deleteTableSafely('inventory_items');
+      await deleteTableSafely('property_locations');
+      await deleteTableSafely('notifications');
+
+      // 3. Clear property_id for remaining owner
+      try {
+        await supabase.from('users').update({ property_id: null }).eq('role', 'owner');
+      } catch (ownerUpdateErr) {
+        console.warn('Owner update notice:', ownerUpdateErr);
+      }
+
+      // 4. Delete all properties
+      const { data: allProps } = await supabase.from('properties').select('id');
+      if (allProps && allProps.length > 0) {
+        const propIds = allProps.map((p) => p.id);
+        for (const pId of propIds) {
+          try {
+            await supabase.from('properties').delete().eq('id', pId);
+          } catch (propErr) {
+            console.warn(`Property ${pId} delete notice:`, propErr);
+          }
+        }
+        await supabase.from('properties').delete().in('id', propIds);
+      }
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('property-updated', { detail: { cleared: true } }));
+        window.dispatchEvent(new CustomEvent('staff-updated', { detail: { cleared: true } }));
+      }
+
+      return true;
+    } catch (err) {
+      console.error('Failed to clear database data:', err);
+      throw err;
+    }
+  },
+
   // ==========================================
   // 2. USERS
   // ==========================================
   async getUsers(): Promise<User[]> {
-    const { data, error } = await supabase.from('users').select('*').order('name');
+    const { data, error } = await supabase.from('users').select('*').neq('is_active', false).order('name');
     if (error) {
       if (isSchemaMissingError(error)) notifySchemaMissing('users', error);
       console.error('Users query error:', error.message);
@@ -632,7 +1034,7 @@ export const dataService = {
   },
 
   async getUsersByProperty(propertyId: string): Promise<User[]> {
-    const { data, error } = await supabase.from('users').select('*').eq('property_id', propertyId);
+    const { data, error } = await supabase.from('users').select('*').eq('property_id', propertyId).neq('is_active', false);
     if (error) {
       throw new Error(error.message || 'Failed to fetch users for property');
     }
@@ -640,7 +1042,7 @@ export const dataService = {
   },
 
   async getUsersByRole(role: UserRole): Promise<User[]> {
-    const { data, error } = await supabase.from('users').select('*').eq('role', role);
+    const { data, error } = await supabase.from('users').select('*').eq('role', role).neq('is_active', false);
     if (error) {
       throw new Error(error.message || 'Failed to fetch users by role');
     }
@@ -654,6 +1056,11 @@ export const dataService = {
     const fallbackSalary = await dataService.getEmployeeMonthlySalary(user as User);
     const initialSalary = user.monthlySalary && user.monthlySalary > 0 ? user.monthlySalary : fallbackSalary;
 
+    const shift1StartVal = user.shift1Start || user.shiftStart || null;
+    const shift1EndVal = user.shift1End || user.shiftEnd || null;
+    const shift2StartVal = user.shift2Start || null;
+    const shift2EndVal = user.shift2End || null;
+
     let createdDbUser: DbUser | null = null;
 
     try {
@@ -666,8 +1073,12 @@ export const dataService = {
           role: user.role,
           property_id: user.propertyId,
           staff_type: user.staffType,
-          shift_start: user.shiftStart,
-          shift_end: user.shiftEnd,
+          shift_start: user.shiftStart || shift1StartVal,
+          shift_end: user.shiftEnd || shift1EndVal,
+          shift_1_start: shift1StartVal,
+          shift_1_end: shift1EndVal,
+          shift_2_start: shift2StartVal,
+          shift_2_end: shift2EndVal,
           monthly_salary: initialSalary,
           joining_date: user.joiningDate || new Date().toISOString().split('T')[0],
           is_active: user.isActive !== false,
@@ -676,13 +1087,15 @@ export const dataService = {
         .single();
 
       if (error) {
-        // Fallback: If is_active, monthly_salary, or joining_date columns don't exist yet on users table, retry with standard core columns
+        // Fallback: If is_active, monthly_salary, shift_1_*, or joining_date columns don't exist yet on users table, retry with standard core columns
         const isColumnMissing =
           error.code === '42703' ||
           error.code === 'PGRST204' ||
           error.message?.includes('is_active') ||
           error.message?.includes('monthly_salary') ||
           error.message?.includes('joining_date') ||
+          error.message?.includes('shift_1') ||
+          error.message?.includes('shift_2') ||
           error.message?.toLowerCase().includes('schema cache') ||
           error.message?.toLowerCase().includes('could not find the');
 
@@ -696,13 +1109,22 @@ export const dataService = {
               role: user.role,
               property_id: user.propertyId,
               staff_type: user.staffType,
-              shift_start: user.shiftStart,
-              shift_end: user.shiftEnd,
+              shift_start: user.shiftStart || shift1StartVal,
+              shift_end: user.shiftEnd || (shift2EndVal || shift1EndVal),
             })
             .select()
             .single();
           if (retryErr) throw retryErr;
-          createdDbUser = { ...retryData, monthly_salary: initialSalary, is_active: user.isActive !== false, joining_date: user.joiningDate };
+          createdDbUser = {
+            ...retryData,
+            shift_1_start: shift1StartVal,
+            shift_1_end: shift1EndVal,
+            shift_2_start: shift2StartVal,
+            shift_2_end: shift2EndVal,
+            monthly_salary: initialSalary,
+            is_active: user.isActive !== false,
+            joining_date: user.joiningDate,
+          };
         } else {
           throw error;
         }
@@ -751,6 +1173,19 @@ export const dataService = {
     if (updates.staffType !== undefined) payload.staff_type = updates.staffType;
     if (updates.shiftStart !== undefined) payload.shift_start = updates.shiftStart;
     if (updates.shiftEnd !== undefined) payload.shift_end = updates.shiftEnd;
+    if (updates.shift1Start !== undefined) {
+      payload.shift_1_start = updates.shift1Start;
+      if (updates.shiftStart === undefined) payload.shift_start = updates.shift1Start;
+    }
+    if (updates.shift1End !== undefined) {
+      payload.shift_1_end = updates.shift1End;
+      if (updates.shiftEnd === undefined && updates.shift2End === undefined) payload.shift_end = updates.shift1End;
+    }
+    if (updates.shift2Start !== undefined) payload.shift_2_start = updates.shift2Start;
+    if (updates.shift2End !== undefined) {
+      payload.shift_2_end = updates.shift2End;
+      if (updates.shiftEnd === undefined && updates.shift2End) payload.shift_end = updates.shift2End;
+    }
     if (updates.monthlySalary !== undefined) payload.monthly_salary = updates.monthlySalary;
     if (updates.joiningDate !== undefined) payload.joining_date = updates.joiningDate;
     if (updates.isActive !== undefined) payload.is_active = updates.isActive;
@@ -770,6 +1205,8 @@ export const dataService = {
           res.error.message?.includes('is_active') ||
           res.error.message?.includes('monthly_salary') ||
           res.error.message?.includes('joining_date') ||
+          res.error.message?.includes('shift_1') ||
+          res.error.message?.includes('shift_2') ||
           res.error.message?.toLowerCase().includes('schema cache') ||
           res.error.message?.toLowerCase().includes('could not find the');
 
@@ -778,6 +1215,10 @@ export const dataService = {
           delete payload.monthly_salary;
           delete payload.joining_date;
           delete payload.is_active;
+          delete payload.shift_1_start;
+          delete payload.shift_1_end;
+          delete payload.shift_2_start;
+          delete payload.shift_2_end;
           const retryRes = await supabase
             .from('users')
             .update(payload)
@@ -785,7 +1226,16 @@ export const dataService = {
             .select()
             .single();
           if (retryRes.error) throw retryRes.error;
-          data = { ...retryRes.data, monthly_salary: updates.monthlySalary, is_active: updates.isActive, joining_date: updates.joiningDate };
+          data = {
+            ...retryRes.data,
+            shift_1_start: updates.shift1Start ?? (retryRes.data as any)?.shift_1_start,
+            shift_1_end: updates.shift1End ?? (retryRes.data as any)?.shift_1_end,
+            shift_2_start: updates.shift2Start ?? (retryRes.data as any)?.shift_2_start,
+            shift_2_end: updates.shift2End ?? (retryRes.data as any)?.shift_2_end,
+            monthly_salary: updates.monthlySalary,
+            is_active: updates.isActive,
+            joining_date: updates.joiningDate,
+          };
         } else {
           throw res.error;
         }
@@ -811,54 +1261,74 @@ export const dataService = {
 
   async deleteUser(id: string): Promise<boolean> {
     try {
-      // 1. Step-by-step relational cleanup to prevent foreign key constraint violations
-      // A. Nullify nullable reviewer/updater references where this user acted
-      await supabase.from('attendance_records').update({ marked_by: null }).eq('marked_by', id);
-      await supabase.from('leave_requests').update({ reviewed_by: null }).eq('reviewed_by', id);
-      await supabase.from('week_off_requests').update({ reviewed_by: null }).eq('reviewed_by', id);
-      await supabase.from('attendance_correction_requests').update({ reviewed_by: null }).eq('reviewed_by', id);
-      await supabase.from('tasks').update({ last_action_by: null }).eq('last_action_by', id);
+      // 1. Check if user is an owner
+      const { data: userCheck } = await supabase.from('users').select('role, phone').eq('id', id).maybeSingle();
+      if (userCheck?.role === 'owner') {
+        throw new Error('Cannot delete an Owner account.');
+      }
 
-      // B. Delete vouchers attached to any tasks created by this user
+      // 2. Step-by-step relational cleanup to prevent foreign key constraint violations
+      // A. Nullify nullable reviewer/updater references where this user acted
+      try { await supabase.from('attendance_records').update({ marked_by: null }).eq('marked_by', id); } catch (_) {}
+      try { await supabase.from('leave_requests').update({ reviewed_by: null }).eq('reviewed_by', id); } catch (_) {}
+      try { await supabase.from('week_off_requests').update({ reviewed_by: null }).eq('reviewed_by', id); } catch (_) {}
+      try { await supabase.from('attendance_correction_requests').update({ reviewed_by: null }).eq('reviewed_by', id); } catch (_) {}
+      try { await supabase.from('tasks').update({ last_action_by: null }).eq('last_action_by', id); } catch (_) {}
+      try { await supabase.from('vouchers').update({ approved_by: null }).eq('approved_by', id); } catch (_) {}
+      try { await supabase.from('salary_advances').update({ created_by: null }).eq('created_by', id); } catch (_) {}
+      try { await supabase.from('salary_history').update({ created_by: null }).eq('created_by', id); } catch (_) {}
+      try { await supabase.from('payroll_adjustments').update({ created_by: null }).eq('created_by', id); } catch (_) {}
+      try { await supabase.from('payroll_records').update({ generated_by: null }).eq('generated_by', id); } catch (_) {}
+      try { await supabase.from('payroll_records').update({ approved_by: null }).eq('approved_by', id); } catch (_) {}
+      try { await supabase.from('payroll_records').update({ locked_by: null }).eq('locked_by', id); } catch (_) {}
+      try { await supabase.from('payroll_records').update({ paid_by: null }).eq('paid_by', id); } catch (_) {}
+
+      // B. Delete vouchers and comments attached to any tasks created by this user
       try {
         const { data: userTasks } = await supabase.from('tasks').select('id').eq('created_by', id);
         if (userTasks && userTasks.length > 0) {
           const taskIds = userTasks.map((t) => t.id);
-          await supabase.from('vouchers').delete().in('task_id', taskIds);
+          try { await supabase.from('task_comments').delete().in('task_id', taskIds); } catch (_) {}
+          try { await supabase.from('vouchers').delete().in('task_id', taskIds); } catch (_) {}
+          try { await supabase.from('tasks').delete().in('id', taskIds); } catch (_) {}
         }
       } catch (tErr) {
         console.warn('Voucher cleanup for user tasks notice:', tErr);
       }
 
-      // C. Delete vouchers created by this user directly
+      // C. Delete payroll adjustments for user's payroll records before deleting payroll records
       try {
-        await supabase.from('vouchers').delete().eq('created_by', id);
-      } catch (vErr) {
-        console.warn('Vouchers created by user notice:', vErr);
+        const { data: userPayrolls } = await supabase.from('payroll_records').select('id').eq('user_id', id);
+        if (userPayrolls && userPayrolls.length > 0) {
+          const pIds = userPayrolls.map((p) => p.id);
+          try { await supabase.from('payroll_adjustments').delete().in('payroll_record_id', pIds); } catch (_) {}
+        }
+      } catch (pErr) {
+        console.warn('Payroll adjustments cleanup notice:', pErr);
       }
 
-      // D. Delete tasks created by this user
-      try {
-        await supabase.from('tasks').delete().eq('created_by', id);
-      } catch (taskErr) {
-        console.warn('Tasks delete notice:', taskErr);
-      }
+      // D. Delete records & logs explicitly created for/by this user (especially RESTRICT ones)
+      try { await supabase.from('payroll_adjustments').delete().eq('created_by', id); } catch (_) {}
+      try { await supabase.from('payroll_records').delete().eq('user_id', id); } catch (_) {}
+      try { await supabase.from('salary_advances').delete().eq('user_id', id); } catch (_) {}
+      try { await supabase.from('salary_history').delete().eq('user_id', id); } catch (_) {}
+      try { await supabase.from('task_comments').delete().eq('user_id', id); } catch (_) {}
+      try { await supabase.from('vouchers').delete().eq('created_by', id); } catch (_) {}
+      try { await supabase.from('attendance_records').delete().eq('user_id', id); } catch (_) {}
+      try { await supabase.from('leave_requests').delete().eq('user_id', id); } catch (_) {}
+      try { await supabase.from('week_off_requests').delete().eq('user_id', id); } catch (_) {}
+      try { await supabase.from('attendance_correction_requests').delete().eq('user_id', id); } catch (_) {}
+      try { await supabase.from('shifts').delete().eq('user_id', id); } catch (_) {}
+      try { await supabase.from('staff_performance').delete().eq('user_id', id); } catch (_) {}
+      try { await supabase.from('leaves').delete().eq('user_id', id); } catch (_) {}
+      try { await supabase.from('geofence_logs').delete().eq('user_id', id); } catch (_) {}
+      try { await supabase.from('notifications').delete().eq('user_id', id); } catch (_) {}
+      try { await supabase.from('inventory_logs').delete().eq('created_by', id); } catch (_) {}
 
-      // E. Delete requests & attendance records created for this user
-      try {
-        await supabase.from('attendance_records').delete().eq('user_id', id);
-        await supabase.from('leave_requests').delete().eq('user_id', id);
-        await supabase.from('week_off_requests').delete().eq('user_id', id);
-        await supabase.from('attendance_correction_requests').delete().eq('user_id', id);
-      } catch (reqErr) {
-        console.warn('Attendance/Requests delete notice:', reqErr);
-      }
-
-      // 2. Delete the user row from public.users
+      // 3. Delete the user row from public.users (Hard Delete)
       const { error } = await supabase.from('users').delete().eq('id', id);
       if (error) {
-        notifySchemaMissing('users', error);
-        throw new Error(error.message || 'Failed to delete user from database');
+        throw new Error(error.message || 'Failed to hard delete user from database');
       }
 
       // 3. Clear any cached dev session if it belonged to this deleted user
@@ -974,28 +1444,71 @@ export const dataService = {
         }
       }
 
-      // Fetch user shift details if scheduledShiftStart not provided
+      // Fetch user shift details if scheduled shifts not provided
       let shiftStart = record.scheduledShiftStart || null;
       let shiftEnd = record.scheduledShiftEnd || null;
-      if (!shiftStart && record.userId) {
+      let shift1Start = record.shift1Start || null;
+      let shift1End = record.shift1End || null;
+      let shift2Start = record.shift2Start || null;
+      let shift2End = record.shift2End || null;
+
+      if ((!shiftStart || !shift1Start) && record.userId) {
         try {
           const { data: u } = await supabase
             .from('users')
-            .select('shift_start, shift_end')
+            .select('shift_start, shift_end, shift_1_start, shift_1_end, shift_2_start, shift_2_end')
             .eq('id', record.userId)
             .maybeSingle();
           if (u) {
-            shiftStart = u.shift_start;
-            shiftEnd = u.shift_end;
+            shiftStart = shiftStart || u.shift_start;
+            shiftEnd = shiftEnd || u.shift_end;
+            shift1Start = shift1Start || u.shift_1_start || u.shift_start;
+            shift1End = shift1End || u.shift_1_end || u.shift_end;
+            shift2Start = shift2Start || u.shift_2_start;
+            shift2End = shift2End || u.shift_2_end;
           }
         } catch {
           // ignore
         }
       }
 
-      // Calculate worked minutes & total hours
+      // Calculate Shift 1 worked minutes
+      let s1Worked = record.shift1WorkedMinutes ?? 0;
+      const s1In = record.shift1ClockInTime || record.shift1InTime || record.clockInTime;
+      const s1Out = record.shift1ClockOutTime || record.shift1OutTime;
+      if ((!s1Worked || s1Worked === 0) && s1In && s1Out) {
+        try {
+          const [inH, inM] = s1In.split(':').map(Number);
+          const [outH, outM] = s1Out.split(':').map(Number);
+          if (!isNaN(inH) && !isNaN(outH)) {
+            let diff = outH * 60 + outM - (inH * 60 + inM);
+            if (diff < 0) diff += 24 * 60;
+            s1Worked = diff;
+          }
+        } catch {}
+      }
+
+      // Calculate Shift 2 worked minutes
+      let s2Worked = record.shift2WorkedMinutes ?? 0;
+      const s2In = record.shift2ClockInTime || record.shift2InTime;
+      const s2Out = record.shift2ClockOutTime || record.shift2OutTime;
+      if ((!s2Worked || s2Worked === 0) && s2In && s2Out) {
+        try {
+          const [inH, inM] = s2In.split(':').map(Number);
+          const [outH, outM] = s2Out.split(':').map(Number);
+          if (!isNaN(inH) && !isNaN(outH)) {
+            let diff = outH * 60 + outM - (inH * 60 + inM);
+            if (diff < 0) diff += 24 * 60;
+            s2Worked = diff;
+          }
+        } catch {}
+      }
+
+      // Calculate total worked minutes & total hours
       let workedMinutes = record.workedMinutes ?? 0;
-      if ((!workedMinutes || workedMinutes === 0) && record.clockInTime && record.clockOutTime) {
+      if (s1Worked > 0 || s2Worked > 0) {
+        workedMinutes = s1Worked + s2Worked;
+      } else if ((!workedMinutes || workedMinutes === 0) && record.clockInTime && record.clockOutTime) {
         try {
           const [inH, inM] = record.clockInTime.split(':').map(Number);
           const [outH, outM] = record.clockOutTime.split(':').map(Number);
@@ -1004,21 +1517,21 @@ export const dataService = {
             if (diff < 0) diff += 24 * 60;
             workedMinutes = diff;
           }
-        } catch {
-          // ignore
-        }
+        } catch {}
       }
       const totalHours = Number((workedMinutes / 60).toFixed(2));
 
-      // Calculate late minutes & penalty eligibility
+      // Calculate late minutes & penalty eligibility (checking Shift 1 start)
       let lateMinutes = record.lateMinutes ?? 0;
       let latePenaltyEligible = record.latePenaltyEligible ?? false;
       let latePenaltyStatus: LatePenaltyStatus = record.latePenaltyStatus ?? 'none';
 
-      if (record.clockInTime && shiftStart) {
+      const checkInTime = s1In || record.clockInTime;
+      const checkStartTime = shift1Start || shiftStart;
+      if (checkInTime && checkStartTime) {
         try {
-          const [punchH, punchM] = record.clockInTime.split(':').map(Number);
-          const [schedH, schedM] = shiftStart.split(':').map(Number);
+          const [punchH, punchM] = checkInTime.split(':').map(Number);
+          const [schedH, schedM] = checkStartTime.split(':').map(Number);
           if (!isNaN(punchH) && !isNaN(schedH)) {
             const punchTotal = punchH * 60 + punchM;
             const schedTotal = schedH * 60 + schedM;
@@ -1037,40 +1550,54 @@ export const dataService = {
               latePenaltyStatus = 'none';
             }
           }
-        } catch {
-          // ignore
-        }
+        } catch {}
       }
 
       // Determine shift status
       let shiftStatus: ShiftPunchStatus = record.shiftStatus;
       if (!shiftStatus) {
-        if (record.clockOutTime) {
+        if (s2Out || (s1Out && !shift2Start)) {
           shiftStatus = 'completed';
-        } else if (record.clockInTime) {
+        } else if (s1In || s2In || record.clockInTime) {
           shiftStatus = 'in_progress';
         } else {
           shiftStatus = 'not_started';
         }
       }
 
-      // Ensure status is pure attendance outcome
-      const safeStatus: AttendanceStatus =
-        record.status ?? (record.clockInTime ? 'present' : 'absent');
+      // Auto-suggest attendance outcome if not manually adjusted
+      let resolvedStatus: AttendanceStatus = record.status;
+      if (!resolvedStatus || resolvedStatus === 'unmarked' as any) {
+        if (shift2Start) {
+          // Split shift staff
+          const s1Done = Boolean(s1In && s1Out);
+          const s2Done = Boolean(s2In && s2Out);
+          if (s1Done && s2Done) {
+            resolvedStatus = 'present';
+          } else if (s1Done || s2Done || s1In || s2In) {
+            resolvedStatus = 'half_day';
+          } else {
+            resolvedStatus = 'absent';
+          }
+        } else {
+          // Single shift staff
+          resolvedStatus = (s1In || record.clockInTime) ? 'present' : 'absent';
+        }
+      }
 
-      const payload = {
+      const basicPayload: Record<string, any> = {
         user_id: record.userId,
         date: record.date,
-        clock_in_time: record.clockInTime,
-        clock_in_selfie_url: record.clockInSelfieUrl,
-        clock_in_lat: record.clockInLat,
-        clock_in_lng: record.clockInLng,
-        clock_out_time: record.clockOutTime,
-        clock_out_selfie_url: record.clockOutSelfieUrl,
-        status: safeStatus,
+        clock_in_time: s1In || record.clockInTime || null,
+        clock_in_selfie_url: record.shift1ClockInSelfieUrl || record.shift1InSelfieUrl || record.clockInSelfieUrl || null,
+        clock_in_lat: record.shift1ClockInLat ?? record.shift1InLat ?? record.clockInLat ?? null,
+        clock_in_lng: record.shift1ClockInLng ?? record.shift1InLng ?? record.clockInLng ?? null,
+        clock_out_time: s2Out || s1Out || record.clockOutTime || null,
+        clock_out_selfie_url: record.shift2ClockOutSelfieUrl || record.shift2OutSelfieUrl || record.shift1ClockOutSelfieUrl || record.shift1OutSelfieUrl || record.clockOutSelfieUrl || null,
+        status: resolvedStatus,
         shift_status: shiftStatus,
-        scheduled_shift_start: shiftStart,
-        scheduled_shift_end: shiftEnd,
+        scheduled_shift_start: shiftStart || shift1Start,
+        scheduled_shift_end: shiftEnd || shift2End || shift1End,
         worked_minutes: workedMinutes,
         late_minutes: lateMinutes,
         late_penalty_eligible: latePenaltyEligible,
@@ -1084,55 +1611,96 @@ export const dataService = {
         marked_by: markedBy,
       };
 
+      const fullPayload: Record<string, any> = {
+        ...basicPayload,
+        // Shift 1 columns
+        shift_1_clock_in_time: s1In || null,
+        shift_1_clock_in_selfie_url: record.shift1ClockInSelfieUrl || record.shift1InSelfieUrl || record.clockInSelfieUrl || null,
+        shift_1_clock_in_lat: record.shift1ClockInLat ?? record.shift1InLat ?? record.clockInLat ?? null,
+        shift_1_clock_in_lng: record.shift1ClockInLng ?? record.shift1InLng ?? record.clockInLng ?? null,
+        shift_1_clock_in_accuracy: record.shift1ClockInAccuracy ?? record.clockInAccuracy ?? null,
+        shift_1_clock_in_address: record.shift1ClockInAddress ?? record.clockInAddress ?? null,
+        shift_1_clock_out_time: s1Out || null,
+        shift_1_clock_out_selfie_url: record.shift1ClockOutSelfieUrl || record.shift1OutSelfieUrl || null,
+        shift_1_clock_out_lat: record.shift1ClockOutLat ?? null,
+        shift_1_clock_out_lng: record.shift1ClockOutLng ?? null,
+        shift_1_clock_out_accuracy: record.shift1ClockOutAccuracy ?? null,
+        shift_1_clock_out_address: record.shift1ClockOutAddress ?? null,
+        shift_1_worked_minutes: s1Worked,
+        shift_1_late_minutes: lateMinutes,
+        shift_1_status: s1Out ? 'completed' : s1In ? 'in_progress' : 'not_started',
+
+        // Shift 2 columns
+        shift_2_clock_in_time: s2In || null,
+        shift_2_clock_in_selfie_url: record.shift2ClockInSelfieUrl || record.shift2InSelfieUrl || null,
+        shift_2_clock_in_lat: record.shift2ClockInLat ?? record.shift2InLat ?? null,
+        shift_2_clock_in_lng: record.shift2ClockInLng ?? record.shift2InLng ?? null,
+        shift_2_clock_in_accuracy: record.shift2ClockInAccuracy ?? null,
+        shift_2_clock_in_address: record.shift2ClockInAddress ?? null,
+        shift_2_clock_out_time: s2Out || null,
+        shift_2_clock_out_selfie_url: record.shift2ClockOutSelfieUrl || record.shift2OutSelfieUrl || null,
+        shift_2_clock_out_lat: record.shift2ClockOutLat ?? null,
+        shift_2_clock_out_lng: record.shift2ClockOutLng ?? null,
+        shift_2_clock_out_accuracy: record.shift2ClockOutAccuracy ?? null,
+        shift_2_clock_out_address: record.shift2ClockOutAddress ?? null,
+        shift_2_worked_minutes: s2Worked,
+        shift_2_late_minutes: 0,
+        shift_2_status: s2Out ? 'completed' : s2In ? 'in_progress' : 'not_started',
+      };
+
+      // Try saving with full split columns first
+      let saveRes;
       if (record.id) {
-        const { data, error } = await supabase
+        saveRes = await supabase
           .from('attendance_records')
-          .upsert({ id: record.id, ...payload })
+          .upsert({ id: record.id, ...fullPayload })
           .select()
           .single();
-        if (error) {
-          notifySchemaMissing('attendance_records', error);
-          if (
-            error.message?.includes('attendance_records_marked_by_fkey') ||
-            error.message?.includes('foreign key constraint')
-          ) {
-            const retryRes = await supabase
-              .from('attendance_records')
-              .upsert({ id: record.id, ...payload, marked_by: null, late_penalty_reviewed_by: null })
-              .select()
-              .single();
-            if (!retryRes.error && retryRes.data) {
-              return mapAttendance(retryRes.data);
-            }
-          }
-          throw new Error(error.message || 'Failed to mark attendance');
-        }
-        return mapAttendance(data);
       } else {
-        const { data, error } = await supabase
+        saveRes = await supabase
           .from('attendance_records')
-          .upsert(payload, { onConflict: 'user_id,date' })
+          .upsert(fullPayload, { onConflict: 'user_id,date' })
           .select()
           .single();
-        if (error) {
-          notifySchemaMissing('attendance_records', error);
-          if (
-            error.message?.includes('attendance_records_marked_by_fkey') ||
-            error.message?.includes('foreign key constraint')
-          ) {
-            const retryRes = await supabase
-              .from('attendance_records')
-              .upsert({ ...payload, marked_by: null, late_penalty_reviewed_by: null }, { onConflict: 'user_id,date' })
-              .select()
-              .single();
-            if (!retryRes.error && retryRes.data) {
-              return mapAttendance(retryRes.data);
-            }
-          }
-          throw new Error(error.message || 'Failed to mark attendance');
-        }
-        return mapAttendance(data);
       }
+
+      // If split columns don't exist yet in Supabase, fallback to basicPayload
+      if (saveRes.error && (isSchemaMissingError(saveRes.error) || saveRes.error.code === '42703' || saveRes.error.message?.includes('does not exist'))) {
+        console.warn('Split shift columns not yet in attendance_records, falling back to standard columns');
+        if (record.id) {
+          saveRes = await supabase
+            .from('attendance_records')
+            .upsert({ id: record.id, ...basicPayload })
+            .select()
+            .single();
+        } else {
+          saveRes = await supabase
+            .from('attendance_records')
+            .upsert(basicPayload, { onConflict: 'user_id,date' })
+            .select()
+            .single();
+        }
+      }
+
+      // Handle FK constraints retry if needed
+      if (saveRes.error) {
+        if (
+          saveRes.error.message?.includes('attendance_records_marked_by_fkey') ||
+          saveRes.error.message?.includes('foreign key constraint')
+        ) {
+          const fallbackPayload = { ...basicPayload, marked_by: null, late_penalty_reviewed_by: null };
+          const retryRes = record.id
+            ? await supabase.from('attendance_records').upsert({ id: record.id, ...fallbackPayload }).select().single()
+            : await supabase.from('attendance_records').upsert(fallbackPayload, { onConflict: 'user_id,date' }).select().single();
+          if (!retryRes.error && retryRes.data) {
+            return mapAttendance(retryRes.data);
+          }
+        }
+        notifySchemaMissing('attendance_records', saveRes.error);
+        throw new Error(saveRes.error.message || 'Failed to mark attendance');
+      }
+
+      return mapAttendance(saveRes.data);
     } catch (err) {
       notifySchemaMissing('attendance_records', err);
       throw err;
@@ -1507,6 +2075,7 @@ export const dataService = {
         .insert({
           user_id: request.userId,
           date: request.date,
+          punch_missed: request.punchMissed,
           note: request.note,
           status: request.status,
           reviewed_by: request.reviewedBy,
@@ -2569,6 +3138,9 @@ export const getProperties = () => dataService.getProperties();
 export const getPropertyById = (id: string) => dataService.getPropertyById(id);
 export const createProperty = (p: Omit<Property, 'id'>) => dataService.createProperty(p);
 export const updateProperty = (id: string, u: Partial<Property>) => dataService.updateProperty(id, u);
+export const deleteProperty = (id: string) => dataService.deleteProperty(id);
+export const clearAllPropertiesAndStaff = (keepOwner?: boolean) => dataService.clearAllPropertiesAndStaff(keepOwner);
+export const clearAllNonOwnerStaff = () => dataService.clearAllNonOwnerStaff();
 
 export const getUsers = () => dataService.getUsers();
 export const getUserById = (id: string) => dataService.getUserById(id);

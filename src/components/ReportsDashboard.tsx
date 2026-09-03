@@ -177,15 +177,15 @@ export default function ReportsDashboard({ onNavigate }: ReportsDashboardProps) 
   // - Vouchers that are pending manager/owner review or head office approval
   // - Active/Pending salary advances needing review
   const pendingVouchers = useMemo(() => {
-    const taskMap = new Map(tasks.map((t) => [t.id, t]));
+    const taskMap = new Map<string, Task>(tasks.map((t) => [t.id, t]));
     return vouchers.filter((v) => {
       const task = taskMap.get(v.taskId);
       if (!task) return false;
       if (selectedPropertyId !== 'all' && task.propertyId !== selectedPropertyId) return false;
       // Pending review states
       return (
-        task.status === 'reported' ||
-        task.status === 'assigned' ||
+        task.status === 'created' ||
+        task.status === 'pending_approval' ||
         (task.status === 'completed' && v.paymentType !== 'no_payment')
       );
     });
@@ -209,7 +209,7 @@ export default function ReportsDashboard({ onNavigate }: ReportsDashboardProps) 
   // B. Task / Issue Approvals:
   const pendingTasks = useMemo(() => {
     return filteredTasks.filter(
-      (t) => t.status === 'reported' || t.status === 'assigned' || t.status === 'in_progress'
+      (t) => t.status === 'created' || t.status === 'pending_approval'
     );
   }, [filteredTasks]);
 
@@ -218,7 +218,7 @@ export default function ReportsDashboard({ onNavigate }: ReportsDashboardProps) 
     const pendingCorr = filteredCorrections.filter((c) => c.status === 'pending').length;
     const pendingLvs = filteredLeaves.filter((l) => l.status === 'pending').length;
     const pendingWks = filteredWeekOffs.filter((w) => w.status === 'pending').length;
-    const pendingLate = filteredAttendance.filter((a) => a.latePenaltyStatus === 'pending_review').length;
+    const pendingLate = filteredAttendance.filter((a) => a.latePenaltyStatus === 'pending').length;
     return pendingCorr + pendingLvs + pendingWks + pendingLate;
   }, [filteredCorrections, filteredLeaves, filteredWeekOffs, filteredAttendance]);
 
@@ -249,7 +249,7 @@ export default function ReportsDashboard({ onNavigate }: ReportsDashboardProps) 
         } else if (record.status === 'on_leave' || record.status === 'week_off') {
           onLeave += 1;
         }
-        if (record.shiftPunchStatus === 'late') {
+        if (record.lateMinutes && record.lateMinutes > 0) {
           late += 1;
         }
       } else {

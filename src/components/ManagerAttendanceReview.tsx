@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { AttendanceRecord, AttendanceStatus, ShiftPunchStatus, User, Property, AttendanceCorrectionRequest } from '../types';
 import { useAuth } from '../context/AuthContext';
+import EditPunchesModal from './EditPunchesModal';
 import {
+  getProperties,
   getUsersByProperty,
   getAttendanceByUserAndDate,
   markAttendance,
@@ -51,6 +53,11 @@ export default function ManagerAttendanceReview({
   onAttendanceMarked,
 }: ManagerAttendanceReviewProps = {}) {
   const { currentUser } = useAuth();
+  const isOwner = currentUser?.role === 'owner';
+  const isManager = currentUser?.role === 'manager';
+
+  const [properties, setProperties] = useState<Property[]>([]);
+  const [selectedPropertyId, setSelectedPropertyId] = useState<string>('');
   const [property, setProperty] = useState<Property | null>(null);
   const [selectedDate, setSelectedDate] = useState<string>(
     () => initialDate || new Date().toISOString().split('T')[0]
@@ -60,6 +67,7 @@ export default function ManagerAttendanceReview({
   const [processingCorrectionId, setProcessingCorrectionId] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
+  const [editingPunchesFor, setEditingPunchesFor] = useState<{ user: User, attendance: AttendanceRecord | null } | null>(null);
   const [notification, setNotification] = useState<{
     type: 'success' | 'error';
     message: string;
@@ -79,21 +87,63 @@ export default function ManagerAttendanceReview({
     }
   }, [initialDate]);
 
+  // Initialize properties
+  useEffect(() => {
+    async function initProperties() {
+      try {
+        if (isOwner) {
+          const props = await getProperties();
+          setProperties(props);
+          if (props.length > 0) {
+            setSelectedPropertyId((prev) => (prev ? prev : (currentUser?.propertyId || props[0].id)));
+          } else {
+            setLoading(false);
+          }
+        } else if (isManager) {
+          let propId = currentUser?.propertyId;
+          if (!propId) {
+            const props = await getProperties();
+            setProperties(props);
+            if (props.length > 0) {
+              propId = props[0].id;
+            }
+          }
+          if (propId) {
+            setSelectedPropertyId(propId);
+          } else {
+            setLoading(false);
+          }
+        } else {
+          setLoading(false);
+        }
+      } catch (err) {
+        console.error('Failed to initialize properties for attendance review', err);
+        setLoading(false);
+      }
+    }
+
+    initProperties();
+  }, [isOwner, isManager, currentUser?.propertyId]);
+
   const loadData = useCallback(async () => {
-    if (!currentUser?.propertyId) return;
+    const activePropertyId = selectedPropertyId || currentUser?.propertyId;
+    if (!activePropertyId) {
+      // If properties are still initializing or none exist, don't stay in infinite loading
+      return;
+    }
 
     try {
       setLoading(true);
       const [prop, users, corrections] = await Promise.all([
-        getPropertyById(currentUser.propertyId),
-        getUsersByProperty(currentUser.propertyId),
-        getAttendanceCorrectionRequestsByProperty(currentUser.propertyId),
+        getPropertyById(activePropertyId),
+        getUsersByProperty(activePropertyId),
+        getAttendanceCorrectionRequestsByProperty(activePropertyId),
       ]);
 
       setProperty(prop);
       setCorrectionRequests(corrections);
 
-      // Filter only Staff and Inventory Managers for the Manager's property
+      // Filter only Staff and Inventory Managers for the property
       const targetUsers = users.filter(
         (u) => u.role === 'staff' || u.role === 'inventory_manager'
       );
@@ -127,11 +177,13 @@ export default function ManagerAttendanceReview({
     } finally {
       setLoading(false);
     }
-  }, [currentUser?.propertyId, selectedDate]);
+  }, [selectedPropertyId, currentUser?.propertyId, selectedDate]);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    if (selectedPropertyId || currentUser?.propertyId) {
+      loadData();
+    }
+  }, [selectedPropertyId, currentUser?.propertyId, loadData]);
 
   // Handle Approving Attendance Correction Request
   const handleApproveCorrection = async (req: AttendanceCorrectionRequest, userName: string) => {
@@ -280,7 +332,7 @@ export default function ManagerAttendanceReview({
         clockOutTime: existingRecord?.clockOutTime ?? null,
         clockOutSelfieUrl: existingRecord?.clockOutSelfieUrl ?? null,
         status: newStatus,
-        shiftStatus: newStatus === 'present' ? (existingRecord?.clockOutTime ? 'completed' : 'in_progress') : 'not_started',
+        shiftStatus: 'completed', // Manager overrides and closes the shift
         managerAdjusted: true,
         adjustmentReason: `Marked as ${newStatus} by Manager`,
         markedBy: currentUser.id,
@@ -379,10 +431,29 @@ export default function ManagerAttendanceReview({
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-300">
-            <Building2 className="w-3.5 h-3.5 text-blue-400" />
-            <span className="font-semibold">{property?.name || 'Property'}</span>
-          </div>
+          {isOwner && properties.length > 0 ? (
+            <div className="flex items-center gap-2 bg-slate-900 border border-slate-700/80 p-1.5 rounded-xl self-start sm:self-auto">
+              <Building2 className="w-4 h-4 text-blue-400 ml-2 shrink-0" />
+              <label htmlFor="owner-attendance-property-select" className="sr-only">Select Property</label>
+              <select
+                id="owner-attendance-property-select"
+                value={selectedPropertyId}
+                onChange={(e) => setSelectedPropertyId(e.target.value)}
+                className="bg-transparent text-xs font-semibold text-slate-100 pr-3 py-1 outline-none cursor-pointer"
+              >
+                {properties.map((p) => (
+                  <option key={p.id} value={p.id} className="bg-slate-900 text-slate-100">
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-300">
+              <Building2 className="w-3.5 h-3.5 text-blue-400" />
+              <span className="font-semibold">{property?.name || 'Property'}</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -642,6 +713,14 @@ export default function ManagerAttendanceReview({
           <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
           <p className="text-xs text-slate-400">Loading attendance records for {selectedDate}...</p>
         </div>
+      ) : !property && properties.length === 0 ? (
+        <div className="p-12 text-center rounded-2xl bg-slate-900/60 border border-slate-800 space-y-2">
+          <Building2 className="w-8 h-8 text-slate-500 mx-auto" />
+          <h3 className="text-sm font-semibold text-slate-200">No Properties Found</h3>
+          <p className="text-xs text-slate-500">
+            Please add or assign a property first in Property Management.
+          </p>
+        </div>
       ) : filteredStaffItems.length === 0 ? (
         <div className="p-12 text-center rounded-2xl bg-slate-900/60 border border-slate-800 space-y-2">
           <AlertCircle className="w-8 h-8 text-slate-500 mx-auto" />
@@ -748,104 +827,256 @@ export default function ManagerAttendanceReview({
                     })()}
                   </div>
 
-                  {/* Clock In / Out Logged Data & Shift Status */}
-                  <div className="flex flex-wrap items-center gap-3 bg-slate-950/70 p-3 rounded-xl border border-slate-800/80">
-                    {/* Clock In Info */}
-                    <div className="flex items-center gap-2.5 pr-3 border-r border-slate-800">
-                      {attendance?.clockInSelfieUrl ? (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setPreviewSelfie({
-                              url: attendance.clockInSelfieUrl!,
-                              title: `Clock In Selfie (${attendance.clockInTime})`,
-                              userName: user.name,
-                            })
-                          }
-                          className="relative group rounded-lg overflow-hidden border border-slate-700 shrink-0 cursor-pointer"
-                        >
-                          <img
-                            src={attendance.clockInSelfieUrl}
-                            alt="Clock-in selfie"
-                            className="w-10 h-10 object-cover"
-                          />
-                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
-                            <Camera className="w-3.5 h-3.5 text-white" />
-                          </div>
-                        </button>
-                      ) : (
-                        <div className="w-10 h-10 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center shrink-0 text-slate-600">
-                          <Clock className="w-4 h-4" />
-                        </div>
-                      )}
-
-                      <div className="space-y-0.5 text-xs">
-                        <div className="text-[10px] uppercase font-semibold text-slate-400 tracking-wider">
-                          Clock In
-                        </div>
-                        {attendance?.clockInTime ? (
-                          <div className="font-mono font-bold text-blue-400 text-xs">
-                            {attendance.clockInTime}
-                          </div>
-                        ) : (
-                          <div className="text-slate-500 italic text-[11px]">Not clocked in</div>
-                        )}
-                        {attendance?.clockInLat !== null && attendance?.clockInLat !== undefined && (
-                          <div className="text-[10px] text-slate-500 font-mono flex items-center gap-0.5">
-                            <MapPin className="w-2.5 h-2.5 shrink-0" />
-                            <span>GPS Logged</span>
-                          </div>
-                        )}
-                      </div>
+                  {/* Clock In / Out Logged Data & Shift Status (Split Shift Aware) */}
+                  <div className="flex flex-col gap-2 bg-slate-950/70 p-3 rounded-xl border border-slate-800/80">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Punch Data</span>
+                      <button
+                        onClick={() => setEditingPunchesFor({ user, attendance })}
+                        className="flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-blue-400 hover:text-blue-300 text-[10px] font-semibold transition"
+                      >
+                        <FileEdit className="w-3 h-3" /> Edit Punches
+                      </button>
                     </div>
-
-                    {/* Clock Out Info */}
-                    <div className="flex items-center gap-2.5 pr-3 border-r border-slate-800">
-                      {attendance?.clockOutSelfieUrl ? (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setPreviewSelfie({
-                              url: attendance.clockOutSelfieUrl!,
-                              title: `Clock Out Selfie (${attendance.clockOutTime})`,
-                              userName: user.name,
-                            })
-                          }
-                          className="relative group rounded-lg overflow-hidden border border-slate-700 shrink-0 cursor-pointer"
-                        >
-                          <img
-                            src={attendance.clockOutSelfieUrl}
-                            alt="Clock-out selfie"
-                            className="w-10 h-10 object-cover"
-                          />
-                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
-                            <Camera className="w-3.5 h-3.5 text-white" />
+                    <div className="flex flex-wrap items-center gap-3">
+                      {/* Check if Split Shift is applicable */}
+                    {Boolean(user.shift2Start || attendance?.shift1ClockInTime || attendance?.shift2ClockInTime || attendance?.shift1InTime || attendance?.shift2InTime) ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full lg:w-auto">
+                        {/* Shift 1 Mini-Card */}
+                        <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-1.5 min-w-[200px]">
+                          <div className="flex items-center justify-between text-[11px] border-b border-slate-800 pb-1">
+                            <span className="font-bold text-amber-400">Shift 1 ({user.shift1Start || user.shiftStart || '08:00'} - {user.shift1End || '14:00'})</span>
+                            {attendance?.shift1WorkedMinutes ? (
+                              <span className="text-[10px] font-mono text-emerald-400">{Math.floor(attendance.shift1WorkedMinutes / 60)}h {attendance.shift1WorkedMinutes % 60}m</span>
+                            ) : null}
                           </div>
-                        </button>
-                      ) : (
-                        <div className="w-10 h-10 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center shrink-0 text-slate-600">
-                          <Clock className="w-4 h-4" />
-                        </div>
-                      )}
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div className="flex items-center gap-1.5">
+                              {attendance?.shift1ClockInSelfieUrl || attendance?.shift1InSelfieUrl ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setPreviewSelfie({
+                                      url: (attendance.shift1ClockInSelfieUrl || attendance.shift1InSelfieUrl)!,
+                                      title: `Shift 1 In Photo (${attendance.shift1ClockInTime || attendance.shift1InTime})`,
+                                      userName: user.name,
+                                    })
+                                  }
+                                  className="rounded overflow-hidden border border-slate-700 shrink-0 cursor-pointer"
+                                >
+                                  <img
+                                    src={attendance.shift1ClockInSelfieUrl || attendance.shift1InSelfieUrl}
+                                    alt="Shift 1 In"
+                                    className="w-7 h-7 object-cover"
+                                  />
+                                </button>
+                              ) : null}
+                              <div>
+                                <div className="text-[9px] text-slate-400 uppercase">In</div>
+                                <div className="font-mono font-bold text-blue-400 text-[11px]">
+                                  {attendance?.shift1ClockInTime || attendance?.shift1InTime || (attendance?.clockInTime && !attendance?.shift2ClockInTime ? attendance.clockInTime : '--:--')}
+                                </div>
+                              </div>
+                            </div>
 
-                      <div className="space-y-0.5 text-xs">
-                        <div className="text-[10px] uppercase font-semibold text-slate-400 tracking-wider">
-                          Clock Out
-                        </div>
-                        {attendance?.clockOutTime ? (
-                          <div className="font-mono font-bold text-emerald-400 text-xs">
-                            {attendance.clockOutTime}
+                            <div className="flex items-center gap-1.5">
+                              {attendance?.shift1ClockOutSelfieUrl || attendance?.shift1OutSelfieUrl ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setPreviewSelfie({
+                                      url: (attendance.shift1ClockOutSelfieUrl || attendance.shift1OutSelfieUrl)!,
+                                      title: `Shift 1 Out Photo (${attendance.shift1ClockOutTime || attendance.shift1OutTime})`,
+                                      userName: user.name,
+                                    })
+                                  }
+                                  className="rounded overflow-hidden border border-slate-700 shrink-0 cursor-pointer"
+                                >
+                                  <img
+                                    src={attendance.shift1ClockOutSelfieUrl || attendance.shift1OutSelfieUrl}
+                                    alt="Shift 1 Out"
+                                    className="w-7 h-7 object-cover"
+                                  />
+                                </button>
+                              ) : null}
+                              <div>
+                                <div className="text-[9px] text-slate-400 uppercase">Out</div>
+                                <div className="font-mono font-bold text-emerald-400 text-[11px]">
+                                  {attendance?.shift1ClockOutTime || attendance?.shift1OutTime || '--:--'}
+                                </div>
+                              </div>
+                            </div>
                           </div>
-                        ) : (
-                          <div className="text-slate-500 italic text-[11px]">Not clocked out</div>
-                        )}
+                        </div>
+
+                        {/* Shift 2 Mini-Card */}
+                        <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-1.5 min-w-[200px]">
+                          <div className="flex items-center justify-between text-[11px] border-b border-slate-800 pb-1">
+                            <span className="font-bold text-purple-400">Shift 2 ({user.shift2Start || '18:00'} - {user.shift2End || '22:00'})</span>
+                            {attendance?.shift2WorkedMinutes ? (
+                              <span className="text-[10px] font-mono text-purple-400">{Math.floor(attendance.shift2WorkedMinutes / 60)}h {attendance.shift2WorkedMinutes % 60}m</span>
+                            ) : null}
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div className="flex items-center gap-1.5">
+                              {attendance?.shift2ClockInSelfieUrl || attendance?.shift2InSelfieUrl ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setPreviewSelfie({
+                                      url: (attendance.shift2ClockInSelfieUrl || attendance.shift2InSelfieUrl)!,
+                                      title: `Shift 2 In Photo (${attendance.shift2ClockInTime || attendance.shift2InTime})`,
+                                      userName: user.name,
+                                    })
+                                  }
+                                  className="rounded overflow-hidden border border-slate-700 shrink-0 cursor-pointer"
+                                >
+                                  <img
+                                    src={attendance.shift2ClockInSelfieUrl || attendance.shift2InSelfieUrl}
+                                    alt="Shift 2 In"
+                                    className="w-7 h-7 object-cover"
+                                  />
+                                </button>
+                              ) : null}
+                              <div>
+                                <div className="text-[9px] text-slate-400 uppercase">In</div>
+                                <div className="font-mono font-bold text-purple-400 text-[11px]">
+                                  {attendance?.shift2ClockInTime || attendance?.shift2InTime || '--:--'}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1.5">
+                              {attendance?.shift2ClockOutSelfieUrl || attendance?.shift2OutSelfieUrl ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setPreviewSelfie({
+                                      url: (attendance.shift2ClockOutSelfieUrl || attendance.shift2OutSelfieUrl)!,
+                                      title: `Shift 2 Out Photo (${attendance.shift2ClockOutTime || attendance.shift2OutTime})`,
+                                      userName: user.name,
+                                    })
+                                  }
+                                  className="rounded overflow-hidden border border-slate-700 shrink-0 cursor-pointer"
+                                >
+                                  <img
+                                    src={attendance.shift2ClockOutSelfieUrl || attendance.shift2OutSelfieUrl}
+                                    alt="Shift 2 Out"
+                                    className="w-7 h-7 object-cover"
+                                  />
+                                </button>
+                              ) : null}
+                              <div>
+                                <div className="text-[9px] text-slate-400 uppercase">Out</div>
+                                <div className="font-mono font-bold text-emerald-400 text-[11px]">
+                                  {attendance?.shift2ClockOutTime || attendance?.shift2OutTime || '--:--'}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <>
+                        {/* Single Shift Clock In Info */}
+                        <div className="flex items-center gap-2.5 pr-3 border-r border-slate-800">
+                          {attendance?.clockInSelfieUrl ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPreviewSelfie({
+                                  url: attendance.clockInSelfieUrl!,
+                                  title: `Clock In Selfie (${attendance.clockInTime})`,
+                                  userName: user.name,
+                                daylight: true,
+                                })
+                              }
+                              className="relative group rounded-lg overflow-hidden border border-slate-700 shrink-0 cursor-pointer"
+                            >
+                              <img
+                                src={attendance.clockInSelfieUrl}
+                                alt="Clock-in selfie"
+                                className="w-10 h-10 object-cover"
+                              />
+                              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
+                                <Camera className="w-3.5 h-3.5 text-white" />
+                              </div>
+                            </button>
+                          ) : (
+                            <div className="w-10 h-10 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center shrink-0 text-slate-600">
+                              <Clock className="w-4 h-4" />
+                            </div>
+                          )}
+
+                          <div className="space-y-0.5 text-xs">
+                            <div className="text-[10px] uppercase font-semibold text-slate-400 tracking-wider">
+                              Clock In
+                            </div>
+                            {attendance?.clockInTime ? (
+                              <div className="font-mono font-bold text-blue-400 text-xs">
+                                {attendance.clockInTime}
+                              </div>
+                            ) : (
+                              <div className="text-slate-500 italic text-[11px]">Not clocked in</div>
+                            )}
+                            {attendance?.clockInLat !== null && attendance?.clockInLat !== undefined && (
+                              <div className="text-[10px] text-slate-500 font-mono flex items-center gap-0.5">
+                                <MapPin className="w-2.5 h-2.5 shrink-0" />
+                                <span>GPS Logged</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Single Shift Clock Out Info */}
+                        <div className="flex items-center gap-2.5 pr-3 border-r border-slate-800">
+                          {attendance?.clockOutSelfieUrl ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPreviewSelfie({
+                                  url: attendance.clockOutSelfieUrl!,
+                                  title: `Clock Out Selfie (${attendance.clockOutTime})`,
+                                  userName: user.name,
+                                })
+                              }
+                              className="relative group rounded-lg overflow-hidden border border-slate-700 shrink-0 cursor-pointer"
+                            >
+                              <img
+                                src={attendance.clockOutSelfieUrl}
+                                alt="Clock-out selfie"
+                                className="w-10 h-10 object-cover"
+                              />
+                              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
+                                <Camera className="w-3.5 h-3.5 text-white" />
+                              </div>
+                            </button>
+                          ) : (
+                            <div className="w-10 h-10 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center shrink-0 text-slate-600">
+                              <Clock className="w-4 h-4" />
+                            </div>
+                          )}
+
+                          <div className="space-y-0.5 text-xs">
+                            <div className="text-[10px] uppercase font-semibold text-slate-400 tracking-wider">
+                              Clock Out
+                            </div>
+                            {attendance?.clockOutTime ? (
+                              <div className="font-mono font-bold text-emerald-400 text-xs">
+                                {attendance.clockOutTime}
+                              </div>
+                            ) : (
+                              <div className="text-slate-500 italic text-[11px]">Not clocked out</div>
+                            )}
+                          </div>
+                        </div>
+                      </>
+                    )}
 
                     {/* Shift Punch Lifecycle Status */}
                     <div className="space-y-0.5 text-xs">
                       <div className="text-[10px] uppercase font-semibold text-slate-400 tracking-wider">
-                        Shift Lifecycle
+                        Lifecycle
                       </div>
                       <div>
                         {shiftStatus === 'completed' ? (
@@ -864,6 +1095,12 @@ export default function ManagerAttendanceReview({
                           <span className="text-[11px] text-slate-500 italic">Not Started</span>
                         )}
                       </div>
+                      {(attendance?.workedMinutes || 0) > 0 && (
+                        <div className="text-[10px] text-slate-400 font-mono">
+                          {Math.floor(attendance!.workedMinutes! / 60)}h {attendance!.workedMinutes! % 60}m worked
+                        </div>
+                      )}
+                    </div>
                     </div>
                   </div>
 
@@ -1075,6 +1312,14 @@ export default function ManagerAttendanceReview({
           </div>
         </div>
       )}
+
+      <EditPunchesModal
+        isOpen={!!editingPunchesFor}
+        onClose={() => setEditingPunchesFor(null)}
+        attendance={editingPunchesFor?.attendance || null}
+        user={editingPunchesFor?.user!}
+        date={selectedDate}
+      />
     </div>
   );
 }

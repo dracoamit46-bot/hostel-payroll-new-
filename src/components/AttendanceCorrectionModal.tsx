@@ -43,6 +43,7 @@ export default function AttendanceCorrectionModal({
   };
 
   const [date, setDate] = useState<string>(initialDate || getYesterdayStr());
+  const [punchMissed, setPunchMissed] = useState<string>('entire_day');
   const [note, setNote] = useState<string>('');
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -101,6 +102,7 @@ export default function AttendanceCorrectionModal({
       await createAttendanceCorrectionRequest({
         userId: currentUser.id,
         date,
+        punchMissed,
         note: note.trim() ? note.trim() : null,
         status: 'pending',
         reviewedBy: null,
@@ -108,6 +110,7 @@ export default function AttendanceCorrectionModal({
 
       setSuccess(`Attendance correction request submitted for ${date}. Your Manager will review and mark it.`);
       setNote('');
+      setPunchMissed('entire_day');
       window.dispatchEvent(new CustomEvent('attendance-updated', { detail: { date } }));
       await loadHistory();
       if (onSubmitted) onSubmitted();
@@ -185,6 +188,23 @@ export default function AttendanceCorrectionModal({
 
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              Missed Punch <span className="text-rose-400">*</span>
+            </label>
+            <select
+              value={punchMissed}
+              onChange={(e) => setPunchMissed(e.target.value)}
+              className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-xs md:text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+            >
+              <option value="entire_day">Entire Day Missing</option>
+              <option value="shift_1_in">Shift 1 - Clock In</option>
+              <option value="shift_1_out">Shift 1 - Clock Out</option>
+              <option value="shift_2_in">Shift 2 - Clock In</option>
+              <option value="shift_2_out">Shift 2 - Clock Out</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
               Reason / Shift Details
             </label>
             <textarea
@@ -257,6 +277,11 @@ export default function AttendanceCorrectionModal({
                       <span className="font-mono font-bold text-slate-200">
                         {req.date}
                       </span>
+                      {req.punchMissed && req.punchMissed !== 'entire_day' && (
+                        <span className="px-1.5 py-0.5 rounded-md bg-blue-900/50 text-blue-300 border border-blue-800/50 text-[9px] uppercase font-bold tracking-wider">
+                          {req.punchMissed.replace(/_/g, ' ')}
+                        </span>
+                      )}
                     </div>
                     {req.note && (
                       <p className="text-slate-400 text-[11px] leading-relaxed">

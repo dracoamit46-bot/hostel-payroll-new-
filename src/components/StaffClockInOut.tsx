@@ -17,20 +17,18 @@ import {
   RotateCw,
   LogOut as ClockOutIcon,
   LogIn as ClockInIcon,
-  ShieldCheck,
-  ShieldAlert,
   Building2,
   RefreshCw,
   UserCheck,
   FileEdit,
-  Upload,
-  Sparkles,
   Calendar,
   CalendarDays,
   History,
-  TrendingUp,
-  Award,
-  Info,
+  Timer,
+  ChevronRight,
+  Sun,
+  Moon,
+  Check,
 } from 'lucide-react';
 import AttendanceCorrectionModal from './AttendanceCorrectionModal';
 
@@ -58,6 +56,32 @@ function calculateDistanceMeters(
   return Math.round(R * c);
 }
 
+// Helper to compute minutes difference between two HH:MM strings
+function computeMinutesBetween(start: string, end: string): number {
+  try {
+    const [startH, startM] = start.split(':').map(Number);
+    const [endH, endM] = end.split(':').map(Number);
+    if (isNaN(startH) || isNaN(startM) || isNaN(endH) || isNaN(endM)) return 0;
+    let diff = endH * 60 + endM - (startH * 60 + startM);
+    if (diff < 0) diff += 24 * 60; // handle overnight
+    return diff;
+  } catch {
+    return 0;
+  }
+}
+
+// Helper to format minutes into "Xh Ym"
+function formatDuration(minutes?: number): string {
+  if (!minutes || minutes <= 0) return '0m';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+
+type PunchActionType = 'shift1_in' | 'shift1_out' | 'shift2_in' | 'shift2_out';
+
 export default function StaffClockInOut() {
   const { currentUser } = useAuth();
   const [property, setProperty] = useState<Property | null>(null);
@@ -69,13 +93,21 @@ export default function StaffClockInOut() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   });
 
-  // Active action modal/flow: null | 'clock_in' | 'clock_out'
-  const [activeAction, setActiveAction] = useState<'clock_in' | 'clock_out' | null>(null);
+  // Client-Side Live Digital Clock (Updates every 1000ms, zero server load)
+  const [currentTime, setCurrentTime] = useState<Date>(new Date());
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Active Punch Modal Action
+  const [activeAction, setActiveAction] = useState<PunchActionType | null>(null);
 
   // Camera & selfie state
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [cameraActive, setCameraActive] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [capturedSelfie, setCapturedSelfie] = useState<string | null>(null);
@@ -95,7 +127,7 @@ export default function StaffClockInOut() {
 
   const todayStr = new Date().toISOString().split('T')[0];
 
-  // Helper to stop camera tracks
+  // Stop camera tracks
   const stopCamera = () => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
@@ -114,7 +146,7 @@ export default function StaffClockInOut() {
     };
   }, []);
 
-  // 1. Load today's AttendanceRecord and past history for the current user
+  // Load today's AttendanceRecord and past history for the current user
   const loadData = async () => {
     if (!currentUser) return;
     try {
@@ -153,6 +185,7 @@ export default function StaffClockInOut() {
     const absent = monthlyRecords.filter((r) => r.status === 'absent').length;
     const lateCount = monthlyRecords.filter((r) => (r.lateMinutes || 0) > 15).length;
     const totalLateMinutes = monthlyRecords.reduce((acc, r) => acc + (r.lateMinutes || 0), 0);
+    const totalWorkedHours = monthlyRecords.reduce((acc, r) => acc + (r.totalHours || 0), 0);
 
     return {
       present,
@@ -162,24 +195,23 @@ export default function StaffClockInOut() {
       absent,
       lateCount,
       totalLateMinutes,
+      totalWorkedHours: Number(totalWorkedHours.toFixed(1)),
       totalMarked: monthlyRecords.length,
     };
   }, [monthlyRecords]);
 
-  // Request camera access and stream live feed with resilient fallbacks
+  // Request camera access and stream live feed (Mandatory Live Camera)
   const startCamera = async () => {
     setCameraError(null);
     setCapturedSelfie(null);
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setCameraError('Camera API is not supported in this browser environment. You can upload a photo or use digital punch below.');
+      setCameraError('Camera API is not supported in this browser environment. Please enable camera access.');
       return;
     }
 
     try {
       let stream: MediaStream | null = null;
-
-      // 1. Try front-facing camera with ideal dimensions
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
@@ -190,8 +222,7 @@ export default function StaffClockInOut() {
           audio: false,
         });
       } catch (firstErr) {
-        console.warn('facingMode: user constraint failed, retrying with generic video constraint...', firstErr);
-        // 2. Fallback to basic video constraint (any connected camera / webcam)
+        console.warn('facingMode: user constraint failed, trying generic video constraint...', firstErr);
         stream = await navigator.mediaDevices.getUserMedia({
           video: true,
           audio: false,
@@ -214,7 +245,7 @@ export default function StaffClockInOut() {
     } catch (err: unknown) {
       console.error('Camera access error', err);
       const isNotFound =
-        (err instanceof Error && (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError' || err.name === 'OverconstrainedError')) ||
+        (err instanceof Error && (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError')) ||
         (typeof err === 'object' && err !== null && 'message' in err && String((err as any).message).toLowerCase().includes('device not found'));
 
       const isPermissionDenied =
@@ -222,94 +253,13 @@ export default function StaffClockInOut() {
 
       let errorMsg = 'Unable to start camera feed. Please check device camera permissions.';
       if (isNotFound) {
-        errorMsg = 'No physical camera device was detected on this device. You can upload a photo or generate a digital punch photo below.';
+        errorMsg = 'No camera device detected on this system. Please connect a webcam.';
       } else if (isPermissionDenied) {
-        errorMsg = 'Camera permission was denied. Please allow camera access in browser settings or upload a selfie below.';
+        errorMsg = 'Camera permission was denied. Please allow camera access in your browser settings.';
       }
 
       setCameraError(errorMsg);
       setCameraActive(false);
-    }
-  };
-
-  // Handle manual photo upload fallback
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const dataUrl = event.target?.result as string;
-      if (dataUrl) {
-        setCapturedSelfie(dataUrl);
-        setCameraError(null);
-        stopCamera();
-        requestLocation();
-      }
-    };
-    reader.readAsDataURL(file);
-  };
-
-  // Generate verified digital punch selfie for devices without a physical camera
-  const handleGenerateSampleSelfie = () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 480;
-    canvas.height = 480;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      // Dark slate gradient
-      const grad = ctx.createLinearGradient(0, 0, 480, 480);
-      grad.addColorStop(0, '#0f172a');
-      grad.addColorStop(1, '#1e293b');
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, 480, 480);
-
-      // Outer accent border
-      ctx.strokeStyle = '#6366f1';
-      ctx.lineWidth = 4;
-      ctx.strokeRect(12, 12, 456, 456);
-
-      // Avatar circle
-      ctx.beginPath();
-      ctx.arc(240, 180, 80, 0, Math.PI * 2);
-      ctx.fillStyle = '#4338ca';
-      ctx.fill();
-
-      // Avatar head
-      ctx.beginPath();
-      ctx.arc(240, 160, 40, 0, Math.PI * 2);
-      ctx.fillStyle = '#f8fafc';
-      ctx.fill();
-
-      // Avatar shoulders
-      ctx.beginPath();
-      ctx.arc(240, 265, 60, Math.PI, 0);
-      ctx.fillStyle = '#f8fafc';
-      ctx.fill();
-
-      // Staff details & timestamp watermark
-      ctx.fillStyle = '#f8fafc';
-      ctx.font = 'bold 20px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(currentUser?.name || 'Staff Member', 240, 310);
-
-      ctx.fillStyle = '#818cf8';
-      ctx.font = '13px sans-serif';
-      ctx.fillText(currentUser?.role ? currentUser.role.toUpperCase() : 'STAFF', 240, 335);
-
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = '12px monospace';
-      const timeStr = new Date().toLocaleString();
-      ctx.fillText(timeStr, 240, 375);
-
-      ctx.fillStyle = '#10b981';
-      ctx.font = 'bold 12px sans-serif';
-      ctx.fillText('✓ VERIFIED DIGITAL PUNCH', 240, 405);
-
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-      setCapturedSelfie(dataUrl);
-      setCameraError(null);
-      stopCamera();
-      requestLocation();
     }
   };
 
@@ -321,7 +271,7 @@ export default function StaffClockInOut() {
     }
   }, [cameraActive]);
 
-  // Request geolocation and calculate Haversine distance from property
+  // Request geolocation and calculate Haversine distance
   const requestLocation = () => {
     setLocError(null);
     setLocLat(null);
@@ -343,7 +293,6 @@ export default function StaffClockInOut() {
         setLocLng(userLng);
         setDetectingLoc(false);
 
-        // Fetch user's property coordinates and compute Haversine distance
         if (
           property?.latitude !== null &&
           property?.latitude !== undefined &&
@@ -362,9 +311,9 @@ export default function StaffClockInOut() {
       (err) => {
         setDetectingLoc(false);
         if (err.code === err.PERMISSION_DENIED) {
-          setLocError('Location permission denied. Please allow GPS location to verify geofence.');
+          setLocError('Location permission denied. Please enable GPS.');
         } else {
-          setLocError('Could not retrieve location. Please check your GPS signal.');
+          setLocError('Could not retrieve GPS location.');
         }
       },
       {
@@ -375,7 +324,7 @@ export default function StaffClockInOut() {
     );
   };
 
-  // Capture photo from live video feed onto canvas, convert to data URL, and request geolocation
+  // Capture photo from live video feed
   const handleCaptureSelfie = () => {
     if (!videoRef.current) return;
     const video = videoRef.current;
@@ -385,33 +334,20 @@ export default function StaffClockInOut() {
 
     const ctx = canvas.getContext('2d');
     if (ctx) {
-      // Mirror image for front-facing selfie
+      // Mirror image for front-facing camera
       ctx.translate(canvas.width, 0);
       ctx.scale(-1, 1);
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
       setCapturedSelfie(dataUrl);
       stopCamera();
-
-      // After capturing selfie, request geolocation
       requestLocation();
     }
   };
 
-  // Open clock-in modal
-  const handleOpenClockIn = () => {
-    setActiveAction('clock_in');
-    setCapturedSelfie(null);
-    setLocLat(null);
-    setLocLng(null);
-    setDistanceM(null);
-    setMessage(null);
-    startCamera();
-  };
-
-  // Open clock-out modal
-  const handleOpenClockOut = () => {
-    setActiveAction('clock_out');
+  // Open specific Punch modal
+  const handleOpenAction = (action: PunchActionType) => {
+    setActiveAction(action);
     setCapturedSelfie(null);
     setLocLat(null);
     setLocLng(null);
@@ -432,11 +368,90 @@ export default function StaffClockInOut() {
     setDistanceM(null);
   };
 
-  // Confirm Clock In
-  const handleConfirmClockIn = async () => {
-    if (!currentUser) return;
+  // Haversine distance, time parsing helpers
+  const toMinutes = (timeStr?: string | null): number => {
+    if (!timeStr) return 0;
+    try {
+      const [h, m] = timeStr.split(':').map(Number);
+      if (isNaN(h) || isNaN(m)) return 0;
+      return h * 60 + m;
+    } catch {
+      return 0;
+    }
+  };
+
+  // Shift Timing Configuration for Current User
+  const shift1StartStr = currentUser?.shift1Start || currentUser?.shiftStart || '08:00';
+  const shift1EndStr = currentUser?.shift1End || (currentUser?.shift2Start ? '14:00' : currentUser?.shiftEnd) || '17:00';
+  const hasShift2 = Boolean(currentUser?.shift2Start && currentUser?.shift2End);
+  const shift2StartStr = currentUser?.shift2Start || null;
+  const shift2EndStr = currentUser?.shift2End || null;
+
+  // Time calculations against current system time (currentTime)
+  const currentMinutes = currentTime.getHours() * 60 + currentTime.getMinutes();
+  const s1StartMin = toMinutes(shift1StartStr);
+  const s1EndMin = toMinutes(shift1EndStr);
+  const s2StartMin = shift2StartStr ? toMinutes(shift2StartStr) : null;
+  const s2EndMin = shift2EndStr ? toMinutes(shift2EndStr) : null;
+
+  // Sequential Punch State Determination
+  const shift1In = attendance?.shift1ClockInTime || attendance?.shift1InTime || attendance?.clockInTime || null;
+  const shift1Out = attendance?.shift1ClockOutTime || attendance?.shift1OutTime || (attendance?.shift2ClockInTime ? null : (attendance?.shiftStatus === 'completed' ? attendance?.clockOutTime : null)) || null;
+  const shift2In = attendance?.shift2ClockInTime || attendance?.shift2InTime || null;
+  const shift2Out = attendance?.shift2ClockOutTime || attendance?.shift2OutTime || null;
+
+  // Shift 1 Time Gating Check
+  // If no punch in for Shift 1 and current time is past Shift 1 end time -> Shift 1 is missed!
+  const isShift1Expired = !shift1In && currentMinutes > s1EndMin;
+  const isShift1Active = !isShift1Expired && (!shift1In || (shift1In && !shift1Out));
+  const isShift1Completed = Boolean(shift1In && shift1Out);
+
+  // Shift 2 Time Gating Check
+  const isShift2Early = hasShift2 && s2StartMin !== null && currentMinutes < (s2StartMin - 30);
+  const isShift2InWindow = hasShift2 && s2StartMin !== null && currentMinutes >= (s2StartMin - 30) && (s2EndMin === null || currentMinutes <= (s2EndMin + 120));
+  const isShift2Expired = hasShift2 && s2EndMin !== null && currentMinutes > (s2EndMin + 120) && !shift2In;
+  const isShift2Completed = Boolean(shift2In && shift2Out);
+
+  // Determine which punch action is logically next and whether it is permitted right now
+  let activeShiftAction: PunchActionType | null = null;
+  let actionDisabledReason: string | null = null;
+  let currentStep = 1;
+
+  if (!shift1In && !isShift1Expired) {
+    // Punch 1: Shift 1 In is valid
+    currentStep = 1;
+    activeShiftAction = 'shift1_in';
+  } else if (shift1In && !shift1Out) {
+    // Punch 2: Shift 1 Out
+    currentStep = 2;
+    activeShiftAction = 'shift1_out';
+  } else if (hasShift2 && !shift2In && !isShift2Completed && !isShift2Expired) {
+    // Punch 3: Shift 2 In
+    currentStep = 3;
+    activeShiftAction = 'shift2_in';
+    if (isShift2Early && s2StartMin !== null) {
+      const diffMins = s2StartMin - currentMinutes;
+      const hrs = Math.floor(diffMins / 60);
+      const mins = diffMins % 60;
+      actionDisabledReason = `Shift 2 starts at ${shift2StartStr} (opens in ${hrs > 0 ? `${hrs}h ` : ''}${mins}m). Early clock-in opens 30 mins before shift.`;
+    }
+  } else if (hasShift2 && shift2In && !shift2Out) {
+    // Punch 4: Shift 2 Out
+    currentStep = 4;
+    activeShiftAction = 'shift2_out';
+  } else {
+    // Step 5: Day finished or all shift windows completed
+    currentStep = 5;
+    activeShiftAction = null;
+  }
+
+  const isDayFullyCompleted = currentStep === 5 || isShift2Completed || (isShift1Completed && !hasShift2) || attendance?.shiftStatus === 'completed';
+
+  // Confirm Punch Submission
+  const handleConfirmPunch = async () => {
+    if (!currentUser || !activeAction) return;
     if (!capturedSelfie) {
-      setMessage({ type: 'error', text: 'Please capture your selfie before clocking in.' });
+      setMessage({ type: 'error', text: 'Please capture your live camera photo first.' });
       return;
     }
 
@@ -444,81 +459,145 @@ export default function StaffClockInOut() {
 
     try {
       setSubmitting(true);
-      const saved = await markAttendance({
+      let updatedRecord: Partial<AttendanceRecord> = {
         userId: currentUser.id,
         date: todayStr,
-        clockInTime: nowTime,
-        clockInSelfieUrl: capturedSelfie,
-        clockInLat: locLat,
-        clockInLng: locLng,
-        clockOutTime: null,
-        clockOutSelfieUrl: null,
-        status: 'present',
-        shiftStatus: 'in_progress',
         scheduledShiftStart: currentUser.shiftStart,
         scheduledShiftEnd: currentUser.shiftEnd,
-        markedBy: null,
-      });
+        shift1Start: shift1StartStr,
+        shift1End: shift1EndStr,
+        shift2Start: shift2StartStr,
+        shift2End: shift2EndStr,
+        status: 'present',
+      };
 
+      if (attendance?.id) {
+        updatedRecord.id = attendance.id;
+      }
+
+      if (activeAction === 'shift1_in') {
+        updatedRecord = {
+          ...attendance,
+          ...updatedRecord,
+          shift1ClockInTime: nowTime,
+          shift1ClockInSelfieUrl: capturedSelfie,
+          shift1ClockInLat: locLat,
+          shift1ClockInLng: locLng,
+          shift1InTime: nowTime,
+          shift1InSelfieUrl: capturedSelfie,
+          shift1InLat: locLat,
+          shift1InLng: locLng,
+          clockInTime: nowTime,
+          clockInSelfieUrl: capturedSelfie,
+          clockInLat: locLat,
+          clockInLng: locLng,
+          shiftStatus: 'in_progress',
+        };
+      } else if (activeAction === 'shift1_out') {
+        const s1In = shift1In || nowTime;
+        const s1Worked = computeMinutesBetween(s1In, nowTime);
+        updatedRecord = {
+          ...attendance,
+          ...updatedRecord,
+          shift1ClockInTime: s1In,
+          shift1ClockOutTime: nowTime,
+          shift1ClockOutSelfieUrl: capturedSelfie,
+          shift1ClockOutLat: locLat,
+          shift1ClockOutLng: locLng,
+          shift1WorkedMinutes: s1Worked,
+          shift1InTime: s1In,
+          shift1OutTime: nowTime,
+          shift1OutSelfieUrl: capturedSelfie,
+          shift1OutLat: locLat,
+          shift1OutLng: locLng,
+          clockOutTime: nowTime,
+          clockOutSelfieUrl: capturedSelfie,
+          workedMinutes: s1Worked,
+          totalHours: Number((s1Worked / 60).toFixed(2)),
+          shiftStatus: hasShift2 ? 'in_progress' : 'completed',
+        };
+      } else if (activeAction === 'shift2_in') {
+        updatedRecord = {
+          ...attendance,
+          ...updatedRecord,
+          shift2ClockInTime: nowTime,
+          shift2ClockInSelfieUrl: capturedSelfie,
+          shift2ClockInLat: locLat,
+          shift2ClockInLng: locLng,
+          shift2InTime: nowTime,
+          shift2InSelfieUrl: capturedSelfie,
+          shift2InLat: locLat,
+          shift2InLng: locLng,
+          shiftStatus: 'in_progress',
+        };
+      } else if (activeAction === 'shift2_out') {
+        const s2In = shift2In || nowTime;
+        const s2Worked = computeMinutesBetween(s2In, nowTime);
+        const s1Worked = attendance?.shift1WorkedMinutes || (shift1In && shift1Out ? computeMinutesBetween(shift1In, shift1Out) : 0);
+        const totalWorked = s1Worked + s2Worked;
+
+        updatedRecord = {
+          ...attendance,
+          ...updatedRecord,
+          shift2ClockInTime: s2In,
+          shift2ClockOutTime: nowTime,
+          shift2ClockOutSelfieUrl: capturedSelfie,
+          shift2ClockOutLat: locLat,
+          shift2ClockOutLng: locLng,
+          shift2WorkedMinutes: s2Worked,
+          shift2InTime: s2In,
+          shift2OutTime: nowTime,
+          shift2OutSelfieUrl: capturedSelfie,
+          shift2OutLat: locLat,
+          shift2OutLng: locLng,
+          clockOutTime: nowTime,
+          clockOutSelfieUrl: capturedSelfie,
+          workedMinutes: totalWorked,
+          totalHours: Number((totalWorked / 60).toFixed(2)),
+          shiftStatus: 'completed',
+          status: (s1Worked > 0 && s2Worked > 0) ? 'present' : 'half_day',
+        };
+      }
+
+      const saved = await markAttendance(updatedRecord as any);
       setAttendance(saved);
       window.dispatchEvent(new CustomEvent('attendance-updated', { detail: { date: todayStr } }));
-      
-      const lateNotice = saved.lateMinutes > 15 ? ` (Late by ${saved.lateMinutes} mins - Pending Review)` : '';
-      setMessage({ type: 'success', text: `Successfully clocked in at ${nowTime}! Status: Present${lateNotice}` });
+
+      let actionLabel = 'Shift 1 Clock In';
+      if (activeAction === 'shift1_out') actionLabel = 'Shift 1 Clock Out';
+      if (activeAction === 'shift2_in') actionLabel = 'Shift 2 Clock In';
+      if (activeAction === 'shift2_out') actionLabel = 'Shift 2 Clock Out';
+
+      setMessage({ type: 'success', text: `Successfully recorded ${actionLabel} at ${nowTime}!` });
       handleCloseAction();
       setTimeout(() => setMessage(null), 5000);
     } catch (err) {
-      console.error('Clock in failed', err);
-      setMessage({ type: 'error', text: 'Failed to record clock in. Please try again.' });
+      console.error('Punch recording failed', err);
+      setMessage({ type: 'error', text: 'Failed to record punch. Please try again.' });
     } finally {
       setSubmitting(false);
     }
   };
 
-  // Confirm Clock Out
-  const handleConfirmClockOut = async () => {
+  // Finalize Day as Complete (Single shift worked)
+  const handleMarkDayCompleted = async () => {
     if (!currentUser || !attendance) return;
-    if (!capturedSelfie) {
-      setMessage({ type: 'error', text: 'Please capture your selfie before clocking out.' });
-      return;
-    }
-
-    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-
     try {
       setSubmitting(true);
       const saved = await markAttendance({
-        id: attendance.id,
-        userId: currentUser.id,
-        date: todayStr,
-        clockInTime: attendance.clockInTime,
-        clockInSelfieUrl: attendance.clockInSelfieUrl,
-        clockInLat: attendance.clockInLat,
-        clockInLng: attendance.clockInLng,
-        clockOutTime: nowTime,
-        clockOutSelfieUrl: capturedSelfie,
-        status: attendance.status || 'present',
+        ...attendance,
         shiftStatus: 'completed',
-        scheduledShiftStart: attendance.scheduledShiftStart || currentUser.shiftStart,
-        scheduledShiftEnd: attendance.scheduledShiftEnd || currentUser.shiftEnd,
-        markedBy: attendance.markedBy,
       });
-
       setAttendance(saved);
       window.dispatchEvent(new CustomEvent('attendance-updated', { detail: { date: todayStr } }));
-      setMessage({ type: 'success', text: `Successfully clocked out at ${nowTime}! Shift marked as completed.` });
-      handleCloseAction();
-      setTimeout(() => setMessage(null), 5000);
+      setMessage({ type: 'success', text: 'Daily attendance marked as completed.' });
+      setTimeout(() => setMessage(null), 4000);
     } catch (err) {
-      console.error('Clock out failed', err);
-      setMessage({ type: 'error', text: 'Failed to record clock out. Please try again.' });
+      console.error('Failed to finalize day', err);
     } finally {
       setSubmitting(false);
     }
   };
-
-  const isClockedIn = Boolean(attendance?.clockInTime);
-  const isClockedOut = Boolean(attendance?.clockOutTime);
 
   // Geofence status computation
   const hasConfiguredPropertyCoords =
@@ -532,6 +611,21 @@ export default function StaffClockInOut() {
   const outsideDistance =
     distanceM !== null && distanceM > geofenceRadius ? distanceM - geofenceRadius : 0;
 
+  // Formatted Live Clock Strings
+  const formattedLiveTime = currentTime.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  });
+
+  const formattedLiveDate = currentTime.toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+
   if (loading) {
     return (
       <div className="py-12 flex flex-col items-center justify-center gap-3">
@@ -543,40 +637,35 @@ export default function StaffClockInOut() {
 
   return (
     <div className="space-y-6">
-      {/* Header section */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-5">
-        <div>
-          <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
-            <Clock className="w-5 h-5 text-indigo-400" />
-            Attendance Clock In / Out
-          </h2>
-          <p className="text-sm text-slate-400 mt-1">
-            Log your daily shift with live selfie capture and verified geofence location.
-          </p>
+      {/* 1. TOP LIVE DIGITAL CLOCK & DATE BAR (1000ms Ticking, zero server load) */}
+      <div className="rounded-2xl bg-gradient-to-r from-slate-900 via-slate-900/95 to-slate-900 border border-slate-800 p-5 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div className="flex items-center gap-4 text-center sm:text-left">
+          <div className="w-12 h-12 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 shrink-0 shadow-inner">
+            <Clock className="w-6 h-6" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2 justify-center sm:justify-start">
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-emerald-950/80 border border-emerald-800/60 text-emerald-400 text-[10px] font-bold tracking-wider uppercase">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Live Clock
+              </span>
+              <span className="text-xs text-slate-400">{property ? property.name : 'Hostel Operations'}</span>
+            </div>
+            <div className="text-2xl sm:text-3xl font-extrabold text-white font-mono tracking-tight mt-0.5">
+              {formattedLiveTime}
+            </div>
+          </div>
         </div>
 
-        {/* Status Pill */}
-        <div className="flex items-center gap-2 self-start sm:self-auto">
-          {isClockedOut ? (
-            <div className="text-xs px-3 py-1.5 rounded-lg bg-emerald-950/60 border border-emerald-800/60 text-emerald-300 font-semibold flex items-center gap-1.5">
-              <CheckCircle className="w-4 h-4 text-emerald-400" />
-              <span>Shift Completed Today</span>
-            </div>
-          ) : isClockedIn ? (
-            <div className="text-xs px-3 py-1.5 rounded-lg bg-blue-950/60 border border-blue-800/60 text-blue-300 font-semibold flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
-              <span>On Shift (Clocked in: {attendance?.clockInTime})</span>
-            </div>
-          ) : (
-            <div className="text-xs px-3 py-1.5 rounded-lg bg-amber-950/60 border border-amber-800/60 text-amber-300 font-semibold flex items-center gap-1.5">
-              <Clock className="w-4 h-4 text-amber-400" />
-              <span>Not Clocked In Today</span>
-            </div>
-          )}
+        <div className="text-center sm:text-right border-t sm:border-t-0 border-slate-800 pt-3 sm:pt-0 w-full sm:w-auto">
+          <div className="text-xs text-slate-400 font-medium">{formattedLiveDate}</div>
+          <div className="text-xs text-slate-300 font-semibold mt-1">
+            Logged in: <span className="text-indigo-300">{currentUser?.name}</span> ({currentUser?.staffType || currentUser?.role})
+          </div>
         </div>
       </div>
 
-      {/* Global Notifications */}
+      {/* Global Status Notifications */}
       {message && (
         <div
           className={`p-4 rounded-xl text-xs flex items-center gap-2.5 ${
@@ -594,160 +683,382 @@ export default function StaffClockInOut() {
         </div>
       )}
 
-      {/* Today's Attendance Overview Card */}
-      <div className="rounded-2xl bg-slate-900/90 border border-slate-800 p-5 sm:p-6 shadow-sm space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-4">
-          <div className="space-y-0.5">
-            <div className="flex items-center gap-2">
-              <Building2 className="w-4 h-4 text-indigo-400" />
-              <h3 className="font-bold text-base text-white">
-                {property ? property.name : 'Assigned Property'}
-              </h3>
-            </div>
-            <p className="text-xs text-slate-400">
-              Date: <strong className="text-slate-200">{todayStr}</strong> | Staff: <strong className="text-slate-200">{currentUser?.name}</strong> ({currentUser?.staffType || currentUser?.role})
+      {/* 2. MULTI-SHIFT PUNCH CONTROLS & 4-PUNCH WORKFLOW */}
+      <div className="rounded-2xl bg-slate-900 border border-slate-800 p-5 sm:p-6 shadow-sm space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+          <div>
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <Timer className="w-4 h-4 text-indigo-400" />
+              Daily Shift Attendance &amp; Multi-Shift Punches
+            </h3>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Record Shift 1 &amp; Shift 2 punches using live camera capture.
             </p>
           </div>
 
-          {currentUser?.shiftStart && currentUser?.shiftEnd && (
-            <div className="text-xs text-slate-400 bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800 self-start">
-              Scheduled Shift: <span className="font-mono text-slate-200 font-semibold">{currentUser.shiftStart} - {currentUser.shiftEnd}</span>
-            </div>
-          )}
-        </div>
-
-        {/* Clock In / Clock Out Records Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {/* Clock In Summary */}
-          <div className={`p-4 rounded-xl border space-y-3 ${isClockedIn ? 'bg-slate-950/80 border-slate-800' : 'bg-slate-950/40 border-slate-800/60 border-dashed'}`}>
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                <ClockInIcon className="w-3.5 h-3.5 text-blue-400" />
-                Clock In
+          {/* Overall Status Badge */}
+          <div className="self-start sm:self-auto">
+            {isDayFullyCompleted ? (
+              <span className="px-3 py-1.5 rounded-lg bg-emerald-950/60 border border-emerald-800/60 text-emerald-300 text-xs font-bold flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                All Shifts Completed Today
               </span>
-              {isClockedIn ? (
-                <span className="text-xs font-mono font-bold text-blue-400 bg-blue-950/50 border border-blue-800/40 px-2 py-0.5 rounded">
-                  {attendance?.clockInTime}
-                </span>
-              ) : (
-                <span className="text-xs text-slate-500 italic">Pending</span>
-              )}
-            </div>
-
-            {isClockedIn ? (
-              <div className="flex items-center gap-3 pt-1">
-                {attendance?.clockInSelfieUrl && (
-                  <img
-                    src={attendance.clockInSelfieUrl}
-                    alt="Clock-in selfie"
-                    className="w-14 h-14 rounded-lg object-cover border border-slate-700 shrink-0"
-                  />
-                )}
-                <div className="space-y-1 text-xs">
-                  <div className="flex items-center gap-1 text-slate-400">
-                    <MapPin className="w-3 h-3 text-slate-500 shrink-0" />
-                    <span className="font-mono text-[11px]">
-                      {attendance?.clockInLat !== null && attendance?.clockInLng !== null
-                        ? `${attendance?.clockInLat}, ${attendance?.clockInLng}`
-                        : 'Location recorded'}
-                    </span>
-                  </div>
-                  <div className="text-[11px] text-emerald-400 flex items-center gap-1">
-                    <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
-                    <span>Clock In Logged</span>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <p className="text-xs text-slate-500 pt-1">
-                Tap Clock In below to take your live selfie and record check-in.
-              </p>
-            )}
-          </div>
-
-          {/* Clock Out Summary */}
-          <div className={`p-4 rounded-xl border space-y-3 ${isClockedOut ? 'bg-slate-950/80 border-slate-800' : 'bg-slate-950/40 border-slate-800/60 border-dashed'}`}>
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                <ClockOutIcon className="w-3.5 h-3.5 text-emerald-400" />
-                Clock Out
+            ) : currentStep === 2 ? (
+              <span className="px-3 py-1.5 rounded-lg bg-blue-950/60 border border-blue-800/60 text-blue-300 text-xs font-bold flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+                Shift 1 in Progress
               </span>
-              {isClockedOut ? (
-                <span className="text-xs font-mono font-bold text-emerald-400 bg-emerald-950/50 border border-emerald-800/40 px-2 py-0.5 rounded">
-                  {attendance?.clockOutTime}
-                </span>
-              ) : (
-                <span className="text-xs text-slate-500 italic">Pending</span>
-              )}
-            </div>
-
-            {isClockedOut ? (
-              <div className="flex items-center gap-3 pt-1">
-                {attendance?.clockOutSelfieUrl && (
-                  <img
-                    src={attendance.clockOutSelfieUrl}
-                    alt="Clock-out selfie"
-                    className="w-14 h-14 rounded-lg object-cover border border-slate-700 shrink-0"
-                  />
-                )}
-                <div className="space-y-1 text-xs">
-                  <div className="text-slate-300 font-medium">Status: Present (Shift Completed)</div>
-                  <div className="text-[11px] text-emerald-400 flex items-center gap-1">
-                    <CheckCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>Clock Out Logged</span>
-                  </div>
-                </div>
-              </div>
+            ) : currentStep === 3 ? (
+              <span className="px-3 py-1.5 rounded-lg bg-indigo-950/60 border border-indigo-800/60 text-indigo-300 text-xs font-bold flex items-center gap-1.5">
+                <Sun className="w-4 h-4 text-amber-400" />
+                Shift 1 Completed (Shift 2 Pending)
+              </span>
+            ) : currentStep === 4 ? (
+              <span className="px-3 py-1.5 rounded-lg bg-purple-950/60 border border-purple-800/60 text-purple-300 text-xs font-bold flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
+                Shift 2 in Progress
+              </span>
             ) : (
-              <p className="text-xs text-slate-500 pt-1">
-                {isClockedIn ? 'Tap Clock Out at the end of your shift.' : 'Available after Clock In.'}
-              </p>
+              <span className="px-3 py-1.5 rounded-lg bg-amber-950/60 border border-amber-800/60 text-amber-300 text-xs font-bold flex items-center gap-1.5">
+                <Clock className="w-4 h-4 text-amber-400" />
+                Not Clocked In Today
+              </span>
             )}
           </div>
         </div>
 
-        {/* Primary Action Buttons */}
+        {/* Time-Gated Active Shift Status Banner */}
+        {isShift1Expired && !shift1In && hasShift2 && !shift2In && (
+          <div className="p-4 rounded-xl bg-amber-950/40 border border-amber-800/60 text-amber-200 text-xs flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div className="font-bold text-amber-100">
+                Shift 1 Window Expired ({shift1StartStr} – {shift1EndStr})
+              </div>
+              <p className="text-amber-300/90 leading-relaxed">
+                The morning shift time has passed. The system has automatically shifted focus to your next scheduled shift: <strong className="text-white">Shift 2 ({shift2StartStr} – {shift2EndStr})</strong>.
+              </p>
+              {actionDisabledReason && (
+                <div className="text-[11px] text-amber-400 font-medium pt-1">
+                  ⏳ {actionDisabledReason}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Sequential Punch Steps Indicator */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+          <div className={`p-3 rounded-xl border text-center transition ${shift1In ? 'bg-indigo-950/40 border-indigo-800/60 text-indigo-300' : isShift1Expired ? 'bg-rose-950/20 border-rose-900/50 text-rose-400' : currentStep === 1 ? 'bg-slate-950 border-indigo-500/80 ring-1 ring-indigo-500' : 'bg-slate-950/40 border-slate-800 text-slate-500'}`}>
+            <div className="text-[10px] font-bold uppercase tracking-wider">Punch 1</div>
+            <div className="text-xs font-bold text-white mt-0.5">Shift 1 In</div>
+            <div className="text-[11px] font-mono mt-1">
+              {shift1In ? shift1In : isShift1Expired ? 'Missed' : currentStep === 1 ? 'Active Now' : 'Pending'}
+            </div>
+          </div>
+
+          <div className={`p-3 rounded-xl border text-center transition ${shift1Out ? 'bg-indigo-950/40 border-indigo-800/60 text-indigo-300' : isShift1Expired ? 'bg-rose-950/20 border-rose-900/50 text-rose-400' : currentStep === 2 ? 'bg-slate-950 border-indigo-500/80 ring-1 ring-indigo-500' : 'bg-slate-950/40 border-slate-800 text-slate-500'}`}>
+            <div className="text-[10px] font-bold uppercase tracking-wider">Punch 2</div>
+            <div className="text-xs font-bold text-white mt-0.5">Shift 1 Out</div>
+            <div className="text-[11px] font-mono mt-1">
+              {shift1Out ? shift1Out : isShift1Expired ? 'Missed' : currentStep === 2 ? 'Active Next' : 'Pending'}
+            </div>
+          </div>
+
+          <div className={`p-3 rounded-xl border text-center transition ${shift2In ? 'bg-purple-950/40 border-purple-800/60 text-purple-300' : hasShift2 && currentStep === 3 ? 'bg-slate-950 border-purple-500/80 ring-1 ring-purple-500' : 'bg-slate-950/40 border-slate-800 text-slate-500'}`}>
+            <div className="text-[10px] font-bold uppercase tracking-wider">Punch 3</div>
+            <div className="text-xs font-bold text-white mt-0.5">Shift 2 In</div>
+            <div className="text-[11px] font-mono mt-1">
+              {shift2In ? shift2In : hasShift2 && currentStep === 3 ? (isShift2Early ? 'Upcoming' : 'Active Now') : hasShift2 ? 'Pending' : 'N/A (Single Shift)'}
+            </div>
+          </div>
+
+          <div className={`p-3 rounded-xl border text-center transition ${shift2Out ? 'bg-purple-950/40 border-purple-800/60 text-purple-300' : hasShift2 && currentStep === 4 ? 'bg-slate-950 border-purple-500/80 ring-1 ring-purple-500' : 'bg-slate-950/40 border-slate-800 text-slate-500'}`}>
+            <div className="text-[10px] font-bold uppercase tracking-wider">Punch 4</div>
+            <div className="text-xs font-bold text-white mt-0.5">Shift 2 Out</div>
+            <div className="text-[11px] font-mono mt-1">
+              {shift2Out ? shift2Out : hasShift2 && currentStep === 4 ? 'Active Next' : hasShift2 ? 'Pending' : 'N/A (Single Shift)'}
+            </div>
+          </div>
+        </div>
+
+        {/* 3. SHIFT 1 & SHIFT 2 CARDS (SIDE-BY-SIDE) */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Shift 1 Card */}
+          <div className={`p-4 rounded-xl border space-y-3.5 ${isShift1Expired && !shift1In ? 'bg-slate-950/40 border-slate-800 opacity-85' : 'bg-slate-950/70 border-slate-800'}`}>
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+              <div className="flex items-center gap-2">
+                <Sun className="w-4 h-4 text-amber-400" />
+                <div>
+                  <span className="font-bold text-sm text-white block">Shift 1 (First Shift)</span>
+                  <span className="text-[11px] text-slate-400 font-mono">
+                    {shift1StartStr} – {shift1EndStr}
+                  </span>
+                </div>
+              </div>
+              <div>
+                {shift1In && shift1Out ? (
+                  <span className="text-xs font-mono text-emerald-400 bg-emerald-950/50 border border-emerald-800/40 px-2 py-0.5 rounded">
+                    {formatDuration(attendance?.shift1WorkedMinutes || computeMinutesBetween(shift1In, shift1Out))}
+                  </span>
+                ) : isShift1Expired ? (
+                  <span className="text-[11px] font-semibold text-rose-400 bg-rose-950/50 border border-rose-800/40 px-2 py-0.5 rounded">
+                    Expired / Missed
+                  </span>
+                ) : shift1In ? (
+                  <span className="text-[11px] font-semibold text-blue-400 bg-blue-950/50 border border-blue-800/40 px-2 py-0.5 rounded">
+                    In Progress
+                  </span>
+                ) : (
+                  <span className="text-[11px] text-slate-500 bg-slate-900 border border-slate-800 px-2 py-0.5 rounded">
+                    Not Clocked
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {/* Shift 1 In */}
+              <div className="space-y-1.5 p-3 rounded-lg bg-slate-900 border border-slate-800">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
+                    <ClockInIcon className="w-3 h-3 text-blue-400" /> Clock In
+                  </span>
+                  <span className="font-mono text-xs font-bold text-blue-400">
+                    {shift1In || (isShift1Expired ? 'Missed' : '--:--')}
+                  </span>
+                </div>
+                {attendance?.shift1InSelfieUrl && (
+                  <div className="flex items-center gap-2 pt-1">
+                    <img
+                      src={attendance.shift1InSelfieUrl}
+                      alt="Shift 1 In"
+                      className="w-12 h-12 rounded-lg object-cover border border-slate-700 shrink-0"
+                    />
+                    <div className="text-[10px] text-slate-400 truncate">
+                      Photo captured
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Shift 1 Out */}
+              <div className="space-y-1.5 p-3 rounded-lg bg-slate-900 border border-slate-800">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
+                    <ClockOutIcon className="w-3 h-3 text-emerald-400" /> Clock Out
+                  </span>
+                  <span className="font-mono text-xs font-bold text-emerald-400">
+                    {shift1Out || (isShift1Expired ? 'Missed' : '--:--')}
+                  </span>
+                </div>
+                {attendance?.shift1OutSelfieUrl && (
+                  <div className="flex items-center gap-2 pt-1">
+                    <img
+                      src={attendance.shift1OutSelfieUrl}
+                      alt="Shift 1 Out"
+                      className="w-12 h-12 rounded-lg object-cover border border-slate-700 shrink-0"
+                    />
+                    <div className="text-[10px] text-slate-400 truncate">
+                      Photo captured
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Shift 2 Card */}
+          <div className={`p-4 rounded-xl border space-y-3.5 ${!hasShift2 ? 'bg-slate-950/30 border-slate-800/50 opacity-60' : 'bg-slate-950/70 border-slate-800'}`}>
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+              <div className="flex items-center gap-2">
+                <Moon className="w-4 h-4 text-purple-400" />
+                <div>
+                  <span className="font-bold text-sm text-white block">Shift 2 (Second Shift)</span>
+                  <span className="text-[11px] text-slate-400 font-mono">
+                    {hasShift2 ? `${shift2StartStr} – ${shift2EndStr}` : 'Single Shift Profile'}
+                  </span>
+                </div>
+              </div>
+              <div>
+                {!hasShift2 ? (
+                  <span className="text-[11px] text-slate-500 bg-slate-900 border border-slate-800 px-2 py-0.5 rounded">
+                    Not Applicable
+                  </span>
+                ) : shift2In && shift2Out ? (
+                  <span className="text-xs font-mono text-purple-400 bg-purple-950/50 border border-purple-800/40 px-2 py-0.5 rounded">
+                    {formatDuration(attendance?.shift2WorkedMinutes || computeMinutesBetween(shift2In, shift2Out))}
+                  </span>
+                ) : shift2In ? (
+                  <span className="text-[11px] font-semibold text-purple-400 bg-purple-950/50 border border-purple-800/40 px-2 py-0.5 rounded">
+                    In Progress
+                  </span>
+                ) : isShift2Early ? (
+                  <span className="text-[11px] font-semibold text-amber-400 bg-amber-950/50 border border-amber-800/40 px-2 py-0.5 rounded">
+                    Starts at {shift2StartStr}
+                  </span>
+                ) : (
+                  <span className="text-[11px] text-slate-400 bg-slate-900 border border-slate-800 px-2 py-0.5 rounded">
+                    Pending
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {/* Shift 2 In */}
+              <div className="space-y-1.5 p-3 rounded-lg bg-slate-900 border border-slate-800">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
+                    <ClockInIcon className="w-3 h-3 text-purple-400" /> Clock In
+                  </span>
+                  <span className="font-mono text-xs font-bold text-purple-400">
+                    {shift2In || '--:--'}
+                  </span>
+                </div>
+                {attendance?.shift2InSelfieUrl && (
+                  <div className="flex items-center gap-2 pt-1">
+                    <img
+                      src={attendance.shift2InSelfieUrl}
+                      alt="Shift 2 In"
+                      className="w-12 h-12 rounded-lg object-cover border border-slate-700 shrink-0"
+                    />
+                    <div className="text-[10px] text-slate-400 truncate">
+                      Photo captured
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Shift 2 Out */}
+              <div className="space-y-1.5 p-3 rounded-lg bg-slate-900 border border-slate-800">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
+                    <ClockOutIcon className="w-3 h-3 text-emerald-400" /> Clock Out
+                  </span>
+                  <span className="font-mono text-xs font-bold text-emerald-400">
+                    {shift2Out || '--:--'}
+                  </span>
+                </div>
+                {attendance?.shift2OutSelfieUrl && (
+                  <div className="flex items-center gap-2 pt-1">
+                    <img
+                      src={attendance.shift2OutSelfieUrl}
+                      alt="Shift 2 Out"
+                      className="w-12 h-12 rounded-lg object-cover border border-slate-700 shrink-0"
+                    />
+                    <div className="text-[10px] text-slate-400 truncate">
+                      Photo captured
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Total Worked Hours Today Summary */}
+        {(attendance?.workedMinutes || 0) > 0 && (
+          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between text-xs">
+            <span className="text-slate-400">Total Worked Duration Today:</span>
+            <span className="font-mono font-bold text-emerald-400 text-sm">
+              {formatDuration(attendance?.workedMinutes)} ({attendance?.totalHours || (attendance?.workedMinutes ? (attendance.workedMinutes / 60).toFixed(2) : 0)} hrs)
+            </span>
+          </div>
+        )}
+
+        {/* 4. PRIMARY DYNAMIC ACTION BUTTONS (Time-Gated) */}
         <div className="pt-2 border-t border-slate-800/80 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <p className="text-xs text-slate-400">
-            {!isClockedIn
-              ? 'Ready to begin your shift? Tap Clock In to capture your live selfie and check-in location.'
-              : !isClockedOut
-              ? 'Shift in progress. Tap Clock Out when your shift ends to log your exit selfie.'
-              : 'You have completed both Clock In and Clock Out for today.'}
-          </p>
+          <div className="text-xs text-slate-400 space-y-0.5">
+            {currentStep === 1 ? (
+              <p>Ready for Shift 1? Tap Clock In to capture your live camera photo.</p>
+            ) : currentStep === 2 ? (
+              <p>Shift 1 is active. Tap Clock Out when your first shift ends.</p>
+            ) : currentStep === 3 ? (
+              <p>{isShift1Expired ? `Shift 1 window closed. Active shift is Shift 2 (${shift2StartStr} - ${shift2EndStr}).` : 'Shift 1 completed! Tap Clock In for Shift 2 or mark day as complete.'}</p>
+            ) : currentStep === 4 ? (
+              <p>Shift 2 is active. Tap Clock Out to finish your second shift.</p>
+            ) : (
+              <p>All shift punches recorded for today.</p>
+            )}
+            {actionDisabledReason && (
+              <p className="text-[11px] text-amber-400 font-medium">
+                {actionDisabledReason}
+              </p>
+            )}
+          </div>
 
           <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-            {/* 2. Clock In button (only shown if not already clocked in today) */}
-            {!isClockedIn && (
+            {/* Step 1: Shift 1 Clock In (Only when Shift 1 is not expired) */}
+            {currentStep === 1 && !isShift1Expired && (
               <button
-                id="start-clock-in-btn"
-                onClick={handleOpenClockIn}
+                id="punch-shift1-in-btn"
+                onClick={() => handleOpenAction('shift1_in')}
                 className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-lg shadow-indigo-600/20 transition cursor-pointer shrink-0"
               >
                 <ClockInIcon className="w-4 h-4" />
-                Clock In
+                Punch 1: Shift 1 — Clock In
               </button>
             )}
 
-            {/* 3. Clock Out button (only shown if clocked in but not clocked out today) */}
-            {isClockedIn && !isClockedOut && (
+            {/* Step 2: Shift 1 Clock Out */}
+            {currentStep === 2 && (
               <button
-                id="start-clock-out-btn"
-                onClick={handleOpenClockOut}
+                id="punch-shift1-out-btn"
+                onClick={() => handleOpenAction('shift1_out')}
                 className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 transition cursor-pointer shrink-0"
               >
                 <ClockOutIcon className="w-4 h-4" />
-                Clock Out
+                Punch 2: Shift 1 — Clock Out
+              </button>
+            )}
+
+            {/* Step 3: Shift 2 Clock In OR Finalize Day */}
+            {currentStep === 3 && (
+              <>
+                <button
+                  id="punch-shift2-in-btn"
+                  onClick={() => handleOpenAction('shift2_in')}
+                  disabled={Boolean(isShift2Early)}
+                  title={actionDisabledReason || 'Punch 3: Shift 2 Clock In'}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold shadow-lg shadow-purple-600/20 transition cursor-pointer shrink-0"
+                >
+                  <Moon className="w-4 h-4" />
+                  Punch 3: Shift 2 — Clock In
+                </button>
+                {!isShift1Expired && (
+                  <button
+                    type="button"
+                    onClick={handleMarkDayCompleted}
+                    disabled={submitting}
+                    className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer shrink-0"
+                  >
+                    <Check className="w-4 h-4" />
+                    Single Shift (Day Done)
+                  </button>
+                )}
+              </>
+            )}
+
+            {/* Step 4: Shift 2 Clock Out */}
+            {currentStep === 4 && (
+              <button
+                id="punch-shift2-out-btn"
+                onClick={() => handleOpenAction('shift2_out')}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 transition cursor-pointer shrink-0"
+              >
+                <ClockOutIcon className="w-4 h-4" />
+                Punch 4: Shift 2 — Clock Out
               </button>
             )}
           </div>
         </div>
 
-        {/* Correction Request Callout */}
+        {/* Attendance Correction Notice */}
         <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
           <div className="flex items-center gap-2 text-slate-400">
             <FileEdit className="w-4 h-4 text-blue-400 shrink-0" />
-            <span>Missed punching for yesterday or an earlier date?</span>
+            <span>Missed punching for an earlier shift or date?</span>
           </div>
           <button
             id="btn-open-correction-modal"
@@ -764,7 +1075,7 @@ export default function StaffClockInOut() {
         </div>
       </div>
 
-      {/* Monthly Attendance Summary & Breakdown */}
+      {/* 5. MONTHLY ATTENDANCE SUMMARY & BREAKDOWN */}
       <div className="rounded-2xl bg-slate-900 border border-slate-800 p-5 sm:p-6 shadow-sm space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
           <div className="space-y-0.5">
@@ -773,7 +1084,7 @@ export default function StaffClockInOut() {
               My Monthly Attendance Summary
             </h3>
             <p className="text-xs text-slate-400">
-              Overview of your shifts, week-offs, approved leaves, and punctuality for the selected month.
+              Overview of your shifts, week-offs, approved leaves, and total work hours.
             </p>
           </div>
 
@@ -789,41 +1100,41 @@ export default function StaffClockInOut() {
           </div>
         </div>
 
-        {/* 6 Metric Stat Cards */}
+        {/* Metric Stat Cards */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 text-center">
-            <div className="text-[11px] text-slate-400 font-medium">Logged Records</div>
+            <div className="text-[11px] text-slate-400 font-medium">Logged Days</div>
             <div className="text-lg font-bold text-white font-mono mt-0.5">{monthStats.totalMarked}</div>
             <div className="text-[10px] text-slate-500 mt-0.5">Days Recorded</div>
           </div>
           <div className="p-3 rounded-xl bg-emerald-950/20 border border-emerald-900/40 text-center">
-            <div className="text-[11px] text-emerald-400 font-medium">Present (Full)</div>
+            <div className="text-[11px] text-emerald-400 font-medium">Present Days</div>
             <div className="text-lg font-bold text-emerald-300 font-mono mt-0.5">{monthStats.present}</div>
             <div className="text-[10px] text-emerald-500/80 mt-0.5">Full Shifts</div>
           </div>
           <div className="p-3 rounded-xl bg-amber-950/20 border border-amber-900/40 text-center">
-            <div className="text-[11px] text-amber-400 font-medium">Half Day</div>
+            <div className="text-[11px] text-amber-400 font-medium">Half Days</div>
             <div className="text-lg font-bold text-amber-300 font-mono mt-0.5">{monthStats.halfDay}</div>
             <div className="text-[10px] text-amber-500/80 mt-0.5">Half Shifts</div>
           </div>
           <div className="p-3 rounded-xl bg-sky-950/20 border border-sky-900/40 text-center">
             <div className="text-[11px] text-sky-400 font-medium">Week Offs</div>
             <div className="text-lg font-bold text-sky-300 font-mono mt-0.5">{monthStats.weekOff}</div>
-            <div className="text-[10px] text-sky-500/80 mt-0.5">4/mo Quota</div>
+            <div className="text-[10px] text-sky-500/80 mt-0.5">Approved Offs</div>
           </div>
           <div className="p-3 rounded-xl bg-violet-950/20 border border-violet-900/40 text-center">
             <div className="text-[11px] text-violet-400 font-medium">On Leave</div>
             <div className="text-lg font-bold text-violet-300 font-mono mt-0.5">{monthStats.onLeave}</div>
-            <div className="text-[10px] text-violet-500/80 mt-0.5">Approved</div>
+            <div className="text-[10px] text-violet-500/80 mt-0.5">Approved Leaves</div>
           </div>
-          <div className="p-3 rounded-xl bg-rose-950/20 border border-rose-900/40 text-center">
-            <div className="text-[11px] text-rose-400 font-medium">Absences</div>
-            <div className="text-lg font-bold text-rose-300 font-mono mt-0.5">{monthStats.absent}</div>
-            <div className="text-[10px] text-rose-500/80 mt-0.5">Unapproved</div>
+          <div className="p-3 rounded-xl bg-indigo-950/20 border border-indigo-900/40 text-center">
+            <div className="text-[11px] text-indigo-400 font-medium">Total Hours</div>
+            <div className="text-lg font-bold text-indigo-300 font-mono mt-0.5">{monthStats.totalWorkedHours}h</div>
+            <div className="text-[10px] text-indigo-500/80 mt-0.5">Worked Duration</div>
           </div>
         </div>
 
-        {/* Punctuality and Late Arrival Callout if any */}
+        {/* Late Arrival Notice if any */}
         {monthStats.lateCount > 0 && (
           <div className="p-3 rounded-xl bg-orange-950/20 border border-orange-900/30 flex items-center justify-between text-xs text-orange-300">
             <div className="flex items-center gap-2">
@@ -832,14 +1143,11 @@ export default function StaffClockInOut() {
                 You have <strong className="text-white">{monthStats.lateCount} late arrival{monthStats.lateCount > 1 ? 's' : ''}</strong> (&gt; 15m) totaling <strong className="text-white font-mono">{monthStats.totalLateMinutes} mins</strong> this month.
               </span>
             </div>
-            <span className="text-[11px] text-orange-400/80 hidden sm:inline">
-              Late penalties require Manager review before any payroll deductions.
-            </span>
           </div>
         )}
       </div>
 
-      {/* Monthly Punch History Log Table */}
+      {/* 6. MONTHLY PUNCH HISTORY LOG TABLE */}
       <div className="rounded-2xl bg-slate-900 border border-slate-800 p-5 sm:p-6 shadow-sm space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
           <div className="space-y-0.5">
@@ -848,7 +1156,7 @@ export default function StaffClockInOut() {
               Shift Punch Logs &amp; Past Records
             </h3>
             <p className="text-xs text-slate-400">
-              Detailed list of punches, selfies, work hours, and manager reviews for {selectedMonth}.
+              Detailed list of punches, selfies, and work hours for {selectedMonth}.
             </p>
           </div>
         </div>
@@ -859,17 +1167,6 @@ export default function StaffClockInOut() {
             <p className="text-xs text-slate-400">
               No attendance records logged yet for {selectedMonth}.
             </p>
-            <button
-              type="button"
-              onClick={() => {
-                setCorrectionTargetDate('');
-                setShowCorrectionModal(true);
-              }}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/80 hover:bg-indigo-600 text-white text-xs font-semibold cursor-pointer"
-            >
-              <FileEdit className="w-3.5 h-3.5" />
-              Submit Attendance Request
-            </button>
           </div>
         ) : (
           <div className="space-y-2.5">
@@ -908,7 +1205,6 @@ export default function StaffClockInOut() {
                             Today
                           </span>
                         )}
-                        {/* Attendance Status Badge */}
                         {record.status === 'present' ? (
                           <span className="px-2 py-0.5 rounded-md bg-emerald-950/80 border border-emerald-800 text-emerald-300 text-[11px] font-semibold flex items-center gap-1">
                             <CheckCircle2 className="w-3 h-3" /> Present
@@ -936,53 +1232,55 @@ export default function StaffClockInOut() {
                         )}
                       </div>
 
-                      {/* Punches & Notes */}
+                      {/* Shift Details */}
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
-                        {record.clockInTime && (
-                          <span className="flex items-center gap-1 font-mono text-[11px] text-slate-300">
-                            <ClockInIcon className="w-3 h-3 text-blue-400" />
-                            In: {record.clockInTime}
+                        {record.shift1InTime || record.clockInTime ? (
+                          <span className="font-mono text-[11px] text-slate-300">
+                            S1 In: {record.shift1InTime || record.clockInTime}
                           </span>
-                        )}
-                        {record.clockOutTime && (
-                          <span className="flex items-center gap-1 font-mono text-[11px] text-slate-300">
-                            <ClockOutIcon className="w-3 h-3 text-emerald-400" />
-                            Out: {record.clockOutTime}
+                        ) : null}
+                        {record.shift1OutTime ? (
+                          <span className="font-mono text-[11px] text-slate-300">
+                            S1 Out: {record.shift1OutTime}
                           </span>
-                        )}
-                        {(record.lateMinutes || 0) > 15 && (
-                          <span className="text-orange-400 font-medium text-[11px]">
-                            Late: {record.lateMinutes}m
-                            {record.latePenaltyStatus === 'approved' ? ' (Penalty Applied)' : record.latePenaltyStatus === 'rejected' ? ' (Penalty Waived)' : ''}
+                        ) : null}
+                        {record.shift2InTime ? (
+                          <span className="font-mono text-[11px] text-purple-300">
+                            S2 In: {record.shift2InTime}
                           </span>
-                        )}
-                        {record.managerAdjusted && (
-                          <span className="text-indigo-300 text-[11px] flex items-center gap-0.5">
-                            <ShieldCheck className="w-3 h-3 text-indigo-400" /> Manager Verified
+                        ) : null}
+                        {record.shift2OutTime ? (
+                          <span className="font-mono text-[11px] text-purple-300">
+                            S2 Out: {record.shift2OutTime}
+                          </span>
+                        ) : null}
+                        {(record.workedMinutes || 0) > 0 && (
+                          <span className="text-emerald-400 font-mono text-[11px]">
+                            Total: {formatDuration(record.workedMinutes)}
                           </span>
                         )}
                       </div>
                     </div>
                   </div>
 
-                  {/* Right: Selfies thumbnail & action */}
+                  {/* Right: Selfies thumbnail */}
                   <div className="flex items-center gap-2 self-end sm:self-auto">
-                    {record.clockInSelfieUrl && (
+                    {record.shift1InSelfieUrl || record.clockInSelfieUrl ? (
                       <img
-                        src={record.clockInSelfieUrl}
-                        alt="Clock In"
-                        title="Clock In Selfie"
+                        src={record.shift1InSelfieUrl || record.clockInSelfieUrl || ''}
+                        alt="Punch In"
+                        title="Punch In Photo"
                         className="w-8 h-8 rounded-lg object-cover border border-slate-700 shrink-0"
                       />
-                    )}
-                    {record.clockOutSelfieUrl && (
+                    ) : null}
+                    {record.shift1OutSelfieUrl || record.shift2OutSelfieUrl || record.clockOutSelfieUrl ? (
                       <img
-                        src={record.clockOutSelfieUrl}
-                        alt="Clock Out"
-                        title="Clock Out Selfie"
+                        src={record.shift2OutSelfieUrl || record.shift1OutSelfieUrl || record.clockOutSelfieUrl || ''}
+                        alt="Punch Out"
+                        title="Punch Out Photo"
                         className="w-8 h-8 rounded-lg object-cover border border-slate-700 shrink-0"
                       />
-                    )}
+                    ) : null}
                     {(!record.clockInTime || !record.clockOutTime || record.status === 'absent') && record.date !== todayStr && (
                       <button
                         type="button"
@@ -1014,20 +1312,22 @@ export default function StaffClockInOut() {
         }}
       />
 
-      {/* 2. Interactive Camera & Geolocation Modal / Panel */}
+      {/* 7. MANDATORY LIVE CAMERA SELFIE MODAL (No File Upload, No Verified Badges) */}
       {activeAction && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in-95 duration-200">
             {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
-                {activeAction === 'clock_in' ? (
-                  <ClockInIcon className="w-5 h-5 text-indigo-400" />
-                ) : (
-                  <ClockOutIcon className="w-5 h-5 text-emerald-400" />
-                )}
+                <Camera className="w-5 h-5 text-indigo-400" />
                 <h3 className="text-base font-bold text-white">
-                  {activeAction === 'clock_in' ? 'Clock In - Live Selfie' : 'Clock Out - Live Selfie'}
+                  {activeAction === 'shift1_in'
+                    ? 'Shift 1 — Clock In Selfie'
+                    : activeAction === 'shift1_out'
+                    ? 'Shift 1 — Clock Out Selfie'
+                    : activeAction === 'shift2_in'
+                    ? 'Shift 2 — Clock In Selfie'
+                    : 'Shift 2 — Clock Out Selfie'}
                 </h3>
               </div>
               <button
@@ -1038,12 +1338,12 @@ export default function StaffClockInOut() {
               </button>
             </div>
 
-            {/* Live Camera Viewfinder or Captured Snapshot */}
+            {/* Live Camera Viewfinder */}
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs text-slate-300">
                 <span className="font-semibold flex items-center gap-1.5">
                   <Camera className="w-3.5 h-3.5 text-indigo-400" />
-                  {capturedSelfie ? 'Captured Selfie' : 'Live Camera Preview'}
+                  {capturedSelfie ? 'Captured Selfie' : 'Live Camera View'}
                 </span>
                 {capturedSelfie && (
                   <button
@@ -1055,60 +1355,32 @@ export default function StaffClockInOut() {
                       setDistanceM(null);
                       startCamera();
                     }}
-                    className="text-[11px] text-indigo-400 hover:text-indigo-300 flex items-center gap-1 cursor-pointer"
+                    className="text-[11px] text-indigo-400 hover:text-indigo-300 flex items-center gap-1 cursor-pointer font-medium"
                   >
                     <RefreshCw className="w-3 h-3" />
-                    Retake Selfie
+                    Retake Photo
                   </button>
                 )}
               </div>
-
-              {/* Hidden file input for manual photo upload fallback */}
-              <input
-                type="file"
-                ref={fileInputRef}
-                accept="image/*"
-                capture="user"
-                className="hidden"
-                onChange={handleFileSelect}
-              />
 
               {cameraError ? (
                 <div className="rounded-xl bg-slate-950 border border-slate-800 p-4 text-xs space-y-3">
                   <div className="flex items-start gap-2.5 text-amber-300">
                     <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-400" />
                     <div>
-                      <div className="font-semibold text-white">Camera Device Notice</div>
+                      <div className="font-semibold text-white">Camera Device Access</div>
                       <p className="text-slate-300 mt-1 leading-relaxed">{cameraError}</p>
                     </div>
                   </div>
 
-                  <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center gap-2">
+                  <div className="pt-2 border-t border-slate-800 flex items-center gap-2">
                     <button
                       type="button"
                       onClick={startCamera}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium cursor-pointer transition"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold cursor-pointer transition shadow-sm"
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
-                      Retry Camera
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold cursor-pointer transition shadow-sm shadow-indigo-600/30"
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                      Upload / Take Photo
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={handleGenerateSampleSelfie}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-700/80 hover:bg-emerald-600 border border-emerald-600/40 text-emerald-100 text-xs font-medium cursor-pointer transition"
-                    >
-                      <Sparkles className="w-3.5 h-3.5 text-emerald-300" />
-                      Digital Verified Punch
+                      Grant / Retry Camera
                     </button>
                   </div>
                 </div>
@@ -1119,9 +1391,9 @@ export default function StaffClockInOut() {
                     alt="Captured selfie"
                     className="w-full h-full object-cover"
                   />
-                  <div className="absolute bottom-2 right-2 bg-emerald-950/80 border border-emerald-700 text-emerald-300 text-[11px] px-2 py-0.5 rounded-md flex items-center gap-1">
+                  <div className="absolute bottom-2 right-2 bg-emerald-950/90 border border-emerald-700 text-emerald-300 text-[11px] px-2.5 py-0.5 rounded-md flex items-center gap-1 font-medium">
                     <CheckCircle className="w-3 h-3 text-emerald-400" />
-                    Selfie Captured
+                    Photo Captured
                   </div>
                 </div>
               ) : (
@@ -1136,44 +1408,20 @@ export default function StaffClockInOut() {
                   {!cameraActive && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-slate-950/90 text-slate-400 text-xs p-4 text-center">
                       <RotateCw className="w-6 h-6 animate-spin text-indigo-400" />
-                      <span>Detecting available camera device...</span>
-                      <div className="mt-2 flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => fileInputRef.current?.click()}
-                          className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-200"
-                        >
-                          Upload Photo
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleGenerateSampleSelfie}
-                          className="px-2.5 py-1 rounded bg-indigo-900/60 hover:bg-indigo-800 text-[11px] text-indigo-200"
-                        >
-                          Digital Punch
-                        </button>
-                      </div>
+                      <span>Starting live camera stream...</span>
                     </div>
                   )}
 
                   {cameraActive && (
-                    <div className="absolute bottom-3 inset-x-0 flex justify-center items-center gap-2">
+                    <div className="absolute bottom-3 inset-x-0 flex justify-center items-center">
                       <button
                         type="button"
                         id="capture-selfie-btn"
                         onClick={handleCaptureSelfie}
-                        className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white text-slate-950 hover:bg-slate-200 text-xs font-bold shadow-lg transition cursor-pointer"
+                        className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-white text-slate-950 hover:bg-slate-200 text-xs font-bold shadow-lg transition cursor-pointer"
                       >
                         <Camera className="w-4 h-4 text-indigo-600" />
-                        Capture Selfie
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        title="Upload photo from device"
-                        className="p-2 rounded-full bg-slate-900/80 hover:bg-slate-800 text-slate-200 text-xs transition cursor-pointer backdrop-blur-sm border border-slate-700"
-                      >
-                        <Upload className="w-4 h-4" />
+                        Take Selfie
                       </button>
                     </div>
                   )}
@@ -1181,13 +1429,13 @@ export default function StaffClockInOut() {
               )}
             </div>
 
-            {/* Geolocation & Geofence Section */}
+            {/* Geolocation Section */}
             {capturedSelfie && (
               <div className="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2 text-xs">
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-slate-300 flex items-center gap-1.5">
                     <MapPin className="w-3.5 h-3.5 text-blue-400" />
-                    Location &amp; Geofence Verification
+                    Location &amp; Geofence
                   </span>
                   <button
                     type="button"
@@ -1196,14 +1444,14 @@ export default function StaffClockInOut() {
                     className="text-[11px] text-blue-400 hover:text-blue-300 flex items-center gap-1 cursor-pointer disabled:opacity-50"
                   >
                     <RotateCw className={`w-3 h-3 ${detectingLoc ? 'animate-spin' : ''}`} />
-                    Refresh Location
+                    Refresh
                   </button>
                 </div>
 
                 {detectingLoc ? (
                   <div className="flex items-center gap-2 text-slate-400 py-1">
                     <div className="w-3 h-3 border border-blue-400 border-t-transparent rounded-full animate-spin" />
-                    <span>Getting current GPS location...</span>
+                    <span>Detecting GPS location...</span>
                   </div>
                 ) : locError ? (
                   <div className="p-2.5 rounded-lg bg-rose-950/40 border border-rose-800/40 text-rose-300 flex items-center gap-1.5">
@@ -1211,31 +1459,26 @@ export default function StaffClockInOut() {
                     <span>{locError}</span>
                   </div>
                 ) : !hasConfiguredPropertyCoords ? (
-                  <div className="p-2.5 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-300 text-xs flex items-center gap-2">
+                  <div className="p-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-300 text-xs flex items-center gap-2">
                     <AlertCircle className="w-4 h-4 text-slate-400 shrink-0" />
-                    <span>Geofence not configured for this property.</span>
+                    <span>Branch coordinates not configured.</span>
                   </div>
                 ) : distanceM !== null ? (
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <div className="flex items-center justify-between text-slate-400 font-mono text-[11px]">
-                      <span>Location: {locLat}, {locLng}</span>
-                      <span>Distance: {distanceM}m (Allowed: {geofenceRadius}m)</span>
+                      <span>GPS: {locLat}, {locLng}</span>
+                      <span>Distance: {distanceM}m</span>
                     </div>
 
                     {isWithinGeofence ? (
-                      <div className="p-2.5 rounded-lg bg-emerald-950/40 border border-emerald-800/40 text-emerald-300 flex items-center gap-2 font-medium">
-                        <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                        <span>Within property geofence ({distanceM} meters away).</span>
+                      <div className="p-2 rounded-lg bg-emerald-950/40 border border-emerald-800/40 text-emerald-300 flex items-center gap-2 font-medium">
+                        <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span>Within property area ({distanceM}m away).</span>
                       </div>
                     ) : (
-                      <div className="p-2.5 rounded-lg bg-amber-950/40 border border-amber-800/40 text-amber-300 flex items-start gap-2 font-medium">
-                        <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                        <div>
-                          <span>You are {outsideDistance} meters outside the property radius.</span>
-                          <p className="text-[11px] text-amber-400/80 font-normal mt-0.5">
-                            You may still proceed with clock-in; the location will be flagged.
-                          </p>
-                        </div>
+                      <div className="p-2 rounded-lg bg-amber-950/40 border border-amber-800/40 text-amber-300 flex items-center gap-2 font-medium">
+                        <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                        <span>Outside property radius ({outsideDistance}m outside).</span>
                       </div>
                     )}
                   </div>
@@ -1245,7 +1488,7 @@ export default function StaffClockInOut() {
               </div>
             )}
 
-            {/* Modal Actions */}
+            {/* Modal Action Buttons */}
             <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-800">
               <button
                 type="button"
@@ -1256,29 +1499,16 @@ export default function StaffClockInOut() {
                 Cancel
               </button>
 
-              {activeAction === 'clock_in' ? (
-                <button
-                  type="button"
-                  id="confirm-clock-in-btn"
-                  onClick={handleConfirmClockIn}
-                  disabled={submitting || !capturedSelfie}
-                  className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg transition cursor-pointer"
-                >
-                  <UserCheck className="w-4 h-4" />
-                  {submitting ? 'Clocking In...' : 'Confirm Clock In'}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  id="confirm-clock-out-btn"
-                  onClick={handleConfirmClockOut}
-                  disabled={submitting || !capturedSelfie}
-                  className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg transition cursor-pointer"
-                >
-                  <CheckCircle className="w-4 h-4" />
-                  {submitting ? 'Clocking Out...' : 'Confirm Clock Out'}
-                </button>
-              )}
+              <button
+                type="button"
+                id="confirm-punch-btn"
+                onClick={handleConfirmPunch}
+                disabled={submitting || !capturedSelfie}
+                className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg transition cursor-pointer"
+              >
+                <UserCheck className="w-4 h-4" />
+                {submitting ? 'Recording Punch...' : 'Confirm Punch'}
+              </button>
             </div>
           </div>
         </div>

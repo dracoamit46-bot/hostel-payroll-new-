@@ -45,6 +45,8 @@ import PayrollManagement from './PayrollManagement';
 import StaffPayslips from './StaffPayslips';
 import ReportsDashboard from './ReportsDashboard';
 import BottomStickyMenu from './BottomStickyMenu';
+import { PWAInstallButton } from './PWAInstallButton';
+import { PushNotificationToggle } from './PushNotificationToggle';
 
 export default function PlaceholderDashboard() {
   const { currentUser, logout } = useAuth();
@@ -94,7 +96,7 @@ export default function PlaceholderDashboard() {
         const unmarkedCount = attList.filter((a) => !a || !a.status).length;
         const pendingCorr = corrections.filter((c) => c.status === 'pending').length;
         const pendingTasks = tasksList.filter(
-          (t) => t.propertyId === currentUser.propertyId && (t.status === 'reported' || t.status === 'assigned')
+          (t) => t.propertyId === currentUser.propertyId && (t.status === 'created' || t.status === 'pending_approval')
         ).length;
         const userIds = new Set(users.map((u) => u.id));
         const pendingLeaves = leavesList.filter((l) => userIds.has(l.userId) && l.status === 'pending').length;
@@ -110,7 +112,7 @@ export default function PlaceholderDashboard() {
           getLeaveRequests(),
           getAttendanceCorrectionRequests(),
         ]);
-        const pendingTasks = tasksList.filter((t) => t.status === 'reported' || t.status === 'assigned').length;
+        const pendingTasks = tasksList.filter((t) => t.status === 'created' || t.status === 'pending_approval').length;
         const pendingLeaves = leavesList.filter((l) => l.status === 'pending').length;
         const pendingCorr = corrList.filter((c) => c.status === 'pending').length;
         setTotalPendingApprovals(pendingTasks + pendingLeaves + pendingCorr);
@@ -131,6 +133,24 @@ export default function PlaceholderDashboard() {
       window.removeEventListener('attendance-updated', handleAttendanceUpdated);
     };
   }, [checkAlerts]);
+
+  // Listen for service worker notification click navigation
+  useEffect(() => {
+    const handleSwMessage = (event: MessageEvent) => {
+      if (event.data && event.data.type === 'NAVIGATE_TAB' && event.data.tab) {
+        setActiveTab(event.data.tab);
+      }
+    };
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', handleSwMessage);
+    }
+    return () => {
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+      }
+    };
+  }, []);
 
   // Refresh alerts whenever active tab changes
   useEffect(() => {
@@ -206,8 +226,10 @@ export default function PlaceholderDashboard() {
             <span>{propertyName}</span>
           </div>
 
-          {/* Right: Logout */}
-          <div className="flex items-center gap-2">
+          {/* Right: PWA Install, Push Alerts, Logout */}
+          <div className="flex items-center flex-wrap gap-2">
+            <PWAInstallButton variant="header" />
+            <PushNotificationToggle variant="badge" />
             <button
               id="btn-logout"
               onClick={logout}
@@ -596,6 +618,15 @@ export default function PlaceholderDashboard() {
                 </div>
               </div>
             )}
+
+            {/* PWA & Push Notifications Management */}
+            <div className="space-y-3 pt-2">
+              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                Mobile App &amp; Real-time Alerts
+              </h3>
+              <PushNotificationToggle variant="card" />
+              <PWAInstallButton variant="full" />
+            </div>
 
             {/* Footer note */}
             <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-950/30 p-3 rounded-lg border border-slate-800/40">

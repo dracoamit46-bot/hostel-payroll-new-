@@ -34,8 +34,10 @@ import {
   History,
   TrendingUp,
   Calendar,
+  Pencil,
 } from 'lucide-react';
 import OffboardModal from './OffboardModal';
+import { EditEmployeeModal } from './EditEmployeeModal';
 
 export default function StaffManagement() {
   const { currentUser } = useAuth();
@@ -58,8 +60,11 @@ export default function StaffManagement() {
   const [phone, setPhone] = useState<string>('');
   const [pin, setPin] = useState<string>('123456');
   const [staffType, setStaffType] = useState<string>('');
-  const [shiftStart, setShiftStart] = useState<string>('08:00');
-  const [shiftEnd, setShiftEnd] = useState<string>('16:00');
+  const [shift1Start, setShift1Start] = useState<string>('08:00');
+  const [shift1End, setShift1End] = useState<string>('14:00');
+  const [enableShift2, setEnableShift2] = useState<boolean>(false);
+  const [shift2Start, setShift2Start] = useState<string>('18:00');
+  const [shift2End, setShift2End] = useState<string>('22:00');
   const [monthlySalary, setMonthlySalary] = useState<string>('16000');
   const [joiningDate, setJoiningDate] = useState<string>(
     new Date().toISOString().split('T')[0]
@@ -69,6 +74,9 @@ export default function StaffManagement() {
   const [employeeToDelete, setEmployeeToDelete] = useState<User | null>(null);
   const [offboardingEmployee, setOffboardingEmployee] = useState<User | null>(null);
   const [isOffboarding, setIsOffboarding] = useState<boolean>(false);
+
+  // Edit Employee Modal state
+  const [editingEmployee, setEditingEmployee] = useState<User | null>(null);
 
   // Credentials / PIN modal state
   const [credentialsUser, setCredentialsUser] = useState<User | null>(null);
@@ -97,7 +105,9 @@ export default function StaffManagement() {
 
   // Auto-adjust default salary based on role & staff department
   useEffect(() => {
-    if (selectedRole === 'manager') {
+    if (selectedRole === 'owner') {
+      setMonthlySalary('50000');
+    } else if (selectedRole === 'manager') {
       setMonthlySalary('35000');
     } else if (selectedRole === 'inventory_manager') {
       setMonthlySalary('25000');
@@ -250,8 +260,12 @@ export default function StaffManagement() {
         setErrorMessage('Please specify the Staff Type / Department (e.g. Housekeeping, Kitchen).');
         return;
       }
-      if (!shiftStart || !shiftEnd) {
-        setErrorMessage('Please set both shift start and end times for staff.');
+      if (!shift1Start || !shift1End) {
+        setErrorMessage('Please set both Shift 1 start and end times for staff.');
+        return;
+      }
+      if (enableShift2 && (!shift2Start || !shift2End)) {
+        setErrorMessage('Please set both Shift 2 start and end times or uncheck Shift 2.');
         return;
       }
     }
@@ -265,14 +279,21 @@ export default function StaffManagement() {
         return;
       }
 
+      const effectiveShiftStart = shift1Start || '08:00';
+      const effectiveShiftEnd = enableShift2 ? shift2End || '22:00' : shift1End || '16:00';
+
       const newEmployee = await createUser({
         name: trimmedName,
         phone: trimmedPhone,
         role: roleToCreate,
         propertyId: selectedPropertyId,
         staffType: roleToCreate === 'staff' ? trimmedType : null,
-        shiftStart: roleToCreate === 'staff' ? shiftStart : null,
-        shiftEnd: roleToCreate === 'staff' ? shiftEnd : null,
+        shiftStart: roleToCreate === 'staff' ? effectiveShiftStart : null,
+        shiftEnd: roleToCreate === 'staff' ? effectiveShiftEnd : null,
+        shift1Start: roleToCreate === 'staff' ? shift1Start : null,
+        shift1End: roleToCreate === 'staff' ? shift1End : null,
+        shift2Start: roleToCreate === 'staff' && enableShift2 ? shift2Start : null,
+        shift2End: roleToCreate === 'staff' && enableShift2 ? shift2End : null,
         monthlySalary: parsedSalary,
         joiningDate: joiningDate || new Date().toISOString().split('T')[0],
       });
@@ -293,8 +314,11 @@ export default function StaffManagement() {
       setPhone('');
       setPin('123456');
       setStaffType('');
-      setShiftStart('08:00');
-      setShiftEnd('16:00');
+      setShift1Start('08:00');
+      setShift1End('14:00');
+      setEnableShift2(false);
+      setShift2Start('18:00');
+      setShift2End('22:00');
       setMonthlySalary('16000');
       setJoiningDate(new Date().toISOString().split('T')[0]);
       if (isOwner) {
@@ -302,7 +326,9 @@ export default function StaffManagement() {
       }
 
       const roleLabel =
-        roleToCreate === 'manager'
+        roleToCreate === 'owner'
+          ? 'Owner / Executive Admin'
+          : roleToCreate === 'manager'
           ? 'Property Manager'
           : roleToCreate === 'inventory_manager'
           ? 'Inventory Manager'
@@ -598,6 +624,7 @@ export default function StaffManagement() {
                   <option value="staff">Staff (On-ground Shift Worker)</option>
                   <option value="manager">Manager (Property Head)</option>
                   <option value="inventory_manager">Inventory Manager (Stock &amp; Procurement)</option>
+                  <option value="owner">Owner (Full Admin Access)</option>
                 </select>
               </div>
             )}
@@ -705,35 +732,87 @@ export default function StaffManagement() {
               </div>
             )}
 
-            {/* Shift Start - Only shown when role is 'staff' */}
+            {/* Shift Configuration (Shift 1 and optional Shift 2) - Only shown when role is 'staff' */}
             {(!isOwner || selectedRole === 'staff') && (
-              <div>
-                <label htmlFor="staff-shift-start" className="block text-xs font-medium text-slate-300 mb-1.5">
-                  Shift Start <span className="text-indigo-400">*</span>
-                </label>
-                <input
-                  id="staff-shift-start"
-                  type="time"
-                  value={shiftStart}
-                  onChange={(e) => setShiftStart(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-slate-100 text-sm font-mono outline-none transition"
-                />
-              </div>
-            )}
+              <div className="sm:col-span-2 lg:col-span-3 p-3.5 rounded-xl bg-slate-950/70 border border-slate-800/80 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/60 pb-2">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-200">
+                    <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Working Shift Timings</span>
+                  </div>
+                  <label className="flex items-center gap-2 text-xs font-medium text-indigo-300 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={enableShift2}
+                      onChange={(e) => setEnableShift2(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded bg-slate-900 border-slate-700 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                    />
+                    <span>Split / 2-Shift Schedule (Shift 1 &amp; Shift 2)</span>
+                  </label>
+                </div>
 
-            {/* Shift End - Only shown when role is 'staff' */}
-            {(!isOwner || selectedRole === 'staff') && (
-              <div>
-                <label htmlFor="staff-shift-end" className="block text-xs font-medium text-slate-300 mb-1.5">
-                  Shift End <span className="text-indigo-400">*</span>
-                </label>
-                <input
-                  id="staff-shift-end"
-                  type="time"
-                  value={shiftEnd}
-                  onChange={(e) => setShiftEnd(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-slate-100 text-sm font-mono outline-none transition"
-                />
+                {/* Shift 1 */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label htmlFor="staff-shift-1-start" className="block text-xs font-medium text-slate-300 mb-1">
+                      Shift 1 Start <span className="text-indigo-400">*</span>
+                    </label>
+                    <input
+                      id="staff-shift-1-start"
+                      type="time"
+                      value={shift1Start}
+                      onChange={(e) => setShift1Start(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 focus:border-indigo-500 text-slate-100 text-xs font-mono outline-none transition"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="staff-shift-1-end" className="block text-xs font-medium text-slate-300 mb-1">
+                      Shift 1 End <span className="text-indigo-400">*</span>
+                    </label>
+                    <input
+                      id="staff-shift-1-end"
+                      type="time"
+                      value={shift1End}
+                      onChange={(e) => setShift1End(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 focus:border-indigo-500 text-slate-100 text-xs font-mono outline-none transition"
+                    />
+                  </div>
+                </div>
+
+                {/* Shift 2 (if enabled) */}
+                {enableShift2 && (
+                  <div className="pt-2 border-t border-slate-800/50 space-y-2 animate-in fade-in duration-200">
+                    <div className="text-[11px] font-semibold text-amber-300 flex items-center gap-1">
+                      <span>Shift 2 (Evening / Split Punch)</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label htmlFor="staff-shift-2-start" className="block text-xs font-medium text-slate-300 mb-1">
+                          Shift 2 Start <span className="text-amber-400">*</span>
+                        </label>
+                        <input
+                          id="staff-shift-2-start"
+                          type="time"
+                          value={shift2Start}
+                          onChange={(e) => setShift2Start(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 focus:border-amber-500 text-slate-100 text-xs font-mono outline-none transition"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="staff-shift-2-end" className="block text-xs font-medium text-slate-300 mb-1">
+                          Shift 2 End <span className="text-amber-400">*</span>
+                        </label>
+                        <input
+                          id="staff-shift-2-end"
+                          type="time"
+                          value={shift2End}
+                          onChange={(e) => setShift2End(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 focus:border-amber-500 text-slate-100 text-xs font-mono outline-none transition"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -868,14 +947,26 @@ export default function StaffManagement() {
                         <span className="font-mono text-slate-300">{emp.phone}</span>
                       </span>
 
-                      {(emp.shiftStart || emp.shiftEnd) && (
+                      {/* Shift Timing Display (Split or Single) */}
+                      {emp.shift2Start && emp.shift2End ? (
+                        <span className="flex items-center gap-1.5 bg-slate-950/80 px-2.5 py-1 rounded-lg border border-slate-800">
+                          <Clock className="w-3.5 h-3.5 text-amber-400" />
+                          <span className="text-slate-300 text-xs">
+                            <span className="text-indigo-300 font-medium">S1:</span>{' '}
+                            <span className="font-mono text-slate-200">{emp.shift1Start || emp.shiftStart || '--:--'} - {emp.shift1End || '--:--'}</span>
+                            <span className="mx-1.5 text-slate-600">|</span>
+                            <span className="text-amber-300 font-medium">S2:</span>{' '}
+                            <span className="font-mono text-slate-200">{emp.shift2Start} - {emp.shift2End}</span>
+                          </span>
+                        </span>
+                      ) : (emp.shift1Start || emp.shiftStart || emp.shiftEnd) ? (
                         <span className="flex items-center gap-1.5">
                           <Clock className="w-3.5 h-3.5 text-slate-500" />
                           <span className="font-mono text-slate-300">
-                            {emp.shiftStart || '--:--'} - {emp.shiftEnd || '--:--'}
+                            {emp.shift1Start || emp.shiftStart || '--:--'} - {emp.shift1End || emp.shiftEnd || '--:--'}
                           </span>
                         </span>
-                      )}
+                      ) : null}
 
                       {emp.joiningDate && (
                         <span className="flex items-center gap-1.5">
@@ -892,8 +983,19 @@ export default function StaffManagement() {
                     </div>
                   </div>
 
-                  {/* Actions: Salary Revisions + Credentials/PIN + Offboard + Delete */}
+                  {/* Actions: Edit Details + Salary Revisions + Credentials/PIN + Offboard + Delete */}
                   <div className="self-end sm:self-center flex flex-wrap items-center gap-2">
+                    <button
+                      id={`edit-staff-${emp.id}`}
+                      type="button"
+                      onClick={() => setEditingEmployee(emp)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/90 hover:bg-indigo-500 border border-indigo-500/70 text-white text-xs font-bold shadow-xs transition cursor-pointer"
+                      title="Edit employee shift timings, salary, PIN, and profile details"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                      Edit Details
+                    </button>
+
                     <button
                       id={`salary-history-${emp.id}`}
                       type="button"
@@ -915,10 +1017,10 @@ export default function StaffManagement() {
                         setModalPinError(null);
                         setCopied(false);
                       }}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-950/60 hover:bg-indigo-900/80 border border-indigo-800/60 hover:border-indigo-700 text-indigo-300 hover:text-indigo-200 text-xs font-semibold transition cursor-pointer"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 hover:text-white text-xs font-semibold transition cursor-pointer"
                     >
-                      <KeyRound className="w-3.5 h-3.5" />
-                      Login PIN
+                      <KeyRound className="w-3.5 h-3.5 text-indigo-400" />
+                      PIN
                     </button>
 
                     {(isEmpStaff || isEmpInvManager) && (
@@ -1339,6 +1441,25 @@ export default function StaffManagement() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Edit Employee Modal */}
+      {editingEmployee && (
+        <EditEmployeeModal
+          isOpen={!!editingEmployee}
+          onClose={() => setEditingEmployee(null)}
+          employee={editingEmployee}
+          properties={properties}
+          isOwner={isOwner}
+          onEmployeeUpdated={(updated) => {
+            setEmployeeList((prev) =>
+              prev.map((emp) => (emp.id === updated.id ? updated : emp))
+            );
+            if (selectedPropertyId) {
+              loadEmployees(selectedPropertyId);
+            }
+          }}
+        />
       )}
     </div>
   );
